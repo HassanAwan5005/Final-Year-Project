@@ -291,6 +291,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  searchInput: { flex: 1, ...typography.body, color: colors.text },
   chipsWrap: {
     height: 44,
     marginVertical: 3,

@@ -341,6 +341,12 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: radius.sm,
   },
+  badgeText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: colors.bg,
+    letterSpacing: 0.4,
+  },
   chipRow: {
     paddingHorizontal: spacing.xl,
     paddingVertical: spacing.xs,
