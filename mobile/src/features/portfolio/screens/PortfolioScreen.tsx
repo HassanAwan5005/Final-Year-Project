@@ -66,7 +66,7 @@ export function PortfolioScreen() {
         refreshControl={
           <RefreshControl
             refreshing={albums.isRefetching}
-            onRefresh={() => albums.refetch()}
+            onRefresh={() => { void albums.refetch(); }}
             tintColor={colors.gold}
           />
         }

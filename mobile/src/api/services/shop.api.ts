@@ -1,9 +1,10 @@
 /**
- * Shop, wallet, profile and wishlist API.
+ * Shop, profile and wishlist API.
  *
  * TWO THINGS THIS FILE NEVER SENDS
  * -------------------------------
- * 1. A price. `checkout()` posts an empty body — the server totals the cart
+ * 1. A price. `checkout()` posts only the delivery details (cash on
+ *    delivery) — the server totals the cart
  *    itself. A client that could name its own total buys a Rs 12,000 preset
  *    pack for one rupee, and no amount of later validation is as reliable as
  *    simply never reading the number.
@@ -25,9 +26,7 @@ import type {
   SellerProduct,
   SellerSummary,
   ShopFilterOptions,
-  TopUpRequest,
-  Wallet,
-  WalletTransaction,
+  User,
   Wishlist,
   WishlistCounts,
 } from '../../types/models';
@@ -116,11 +115,12 @@ export const shopApi = {
   },
 
   // ─── Orders ──────────────────────────────────────────────────────────────
-  checkout(key = idempotencyKey('ord')) {
+  /** Cash on delivery: the delivery address and phone are required. */
+  checkout(delivery: CheckoutDelivery, key = idempotencyKey('ord')) {
     return unwrap<Order>(
       api.post(
         ENDPOINTS.marketplace.checkout,
-        {},
+        delivery,
         { headers: { 'Idempotency-Key': key } },
       ),
     );
@@ -150,7 +150,7 @@ export const shopApi = {
     );
   },
 
-  // ─── Seller (read-only) ──────────────────────────────────────────────────
+  // ─── Seller ──────────────────────────────────────────────────────────────
   /** Includes unpublished drafts, so the payload carries the moderation flags. */
   sellerProducts() {
     return unwrap<SellerProduct[]>(api.get(ENDPOINTS.marketplace.sellerProducts));
@@ -159,7 +159,42 @@ export const shopApi = {
   sellerSummary() {
     return unwrap<SellerSummary>(api.get(ENDPOINTS.marketplace.sellerSummary));
   },
+
+  /** List a product for sale (buyers and photographers). Sent as multipart. */
+  createListing(payload: CreateListingPayload) {
+    const form = new FormData();
+    form.append('title', payload.title);
+    form.append('description', payload.description);
+    form.append('price', String(payload.price));
+    form.append('product_type', payload.product_type);
+    payload.photos.forEach((photo, index) => {
+      // React Native's FormData wants this exact triple.
+      form.append('photos', {
+        uri: photo.uri,
+        name: photo.name ?? `product-${index + 1}.jpg`,
+        type: photo.type ?? 'image/jpeg',
+      } as unknown as Blob);
+    });
+    return unwrap<SellerProduct>(
+      api.post(ENDPOINTS.marketplace.sellerProducts, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }),
+    );
+  },
 };
+
+export interface CheckoutDelivery {
+  delivery_address: string;
+  delivery_phone: string;
+}
+
+export interface CreateListingPayload {
+  title: string;
+  description: string;
+  price: number;
+  product_type: string;
+  photos: { uri: string; name?: string; type?: string }[];
+}
 
 export const profileApi = {
   /**
@@ -181,45 +216,14 @@ export const profileApi = {
     );
   },
 
-  wallet() {
-    return unwrap<Wallet>(api.get(ENDPOINTS.profiles.wallet));
+  updateUser(payload: { full_name?: string; phone?: string; city?: string; delete_avatar?: boolean }) {
+    return unwrap<User>(api.patch(ENDPOINTS.auth.me, payload));
   },
 
-  transactions() {
-    return unwrap<WalletTransaction[]>(api.get(ENDPOINTS.profiles.transactions));
+  deleteAccount(reason = 'User requested account deletion') {
+    return api.delete(ENDPOINTS.auth.deleteAccount, { data: { reason } });
   },
 
-  topups() {
-    return unwrap<TopUpRequest[]>(api.get(ENDPOINTS.profiles.topups));
-  },
-
-  /**
-   * Submit a transfer receipt. Credits nothing — an admin verifies it first.
-   *
-   * multipart, because the receipt is an image. Axios must NOT be given an
-   * explicit Content-Type here: the boundary is generated with the FormData
-   * and setting the header by hand strips it, which makes the server see an
-   * empty body.
-   */
-  requestTopUp(payload: {
-    amount: string;
-    method: string;
-    transaction_reference: string;
-    receipt: { uri: string; name: string; type: string };
-  }) {
-    const form = new FormData();
-    form.append('amount', payload.amount);
-    form.append('method', payload.method);
-    form.append('transaction_reference', payload.transaction_reference);
-    form.append('receipt_image', payload.receipt as unknown as Blob);
-
-    return unwrap<TopUpRequest>(
-      api.post(ENDPOINTS.profiles.requestTopup, form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        transformRequest: (data) => data,
-      }),
-    );
-  },
 };
 
 export const wishlistApi = {

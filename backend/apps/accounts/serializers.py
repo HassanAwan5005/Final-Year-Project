@@ -9,6 +9,8 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
+
+from apps.accounts.models import DevicePlatform
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from apps.core.constants import UserRole
@@ -98,18 +100,34 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     adding one line to the request body.
     """
 
+    delete_avatar = serializers.BooleanField(required=False, write_only=True)
+    phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    city = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
     class Meta:
         model = User
-        fields = ("full_name", "phone", "city", "latitude", "longitude", "avatar")
+        fields = ("full_name", "phone", "city", "latitude", "longitude", "avatar", "delete_avatar")
 
     def validate_phone(self, value):
-        return validate_pakistani_phone(value) if value else value
+        if not value:
+            return ""
+        return validate_pakistani_phone(value)
+
+    def validate_city(self, value):
+        return (value or "").strip()
 
     def validate_full_name(self, value):
         value = value.strip()
         if len(value) < 3:
             raise serializers.ValidationError("Please enter your full name.")
         return value
+
+    def update(self, instance, validated_data):
+        if validated_data.pop("delete_avatar", False):
+            if instance.avatar:
+                instance.avatar.delete(save=False)
+            instance.avatar = None
+        return super().update(instance, validated_data)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -221,7 +239,7 @@ class ResendOTPSerializer(serializers.Serializer):
 # ═══════════════════════════════════════════════════════════════════════════
 class DeviceRegisterSerializer(serializers.Serializer):
     device_id = serializers.CharField(max_length=255)
-    platform = serializers.ChoiceField(choices=["IOS", "ANDROID", "WEB"])
+    platform = serializers.ChoiceField(choices=DevicePlatform.choices)
     push_token = serializers.CharField(max_length=512, required=False, allow_blank=True)
     app_version = serializers.CharField(max_length=32, required=False, allow_blank=True)
 

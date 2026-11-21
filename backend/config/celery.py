@@ -41,6 +41,10 @@ app.conf.beat_schedule = {
         "task": "apps.recommendations.tasks.refresh_photographer_features",
         "schedule": crontab(hour=2, minute=30),
     },
+    "refresh-trending-photographers": {
+        "task": "apps.recommendations.tasks.refresh_trending_photographers",
+        "schedule": crontab(minute=5),  # hourly
+    },
     "cleanup-expired-tokens": {
         "task": "apps.accounts.tasks.cleanup_expired_tokens",
         "schedule": crontab(hour=4, minute=0),

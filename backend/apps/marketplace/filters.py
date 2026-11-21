@@ -73,7 +73,8 @@ class ProductFilterSet(django_filters.FilterSet):
             Q(title__icontains=term)
             | Q(description__icontains=term)
             | Q(tags__icontains=term)
-            | Q(seller__business_name__icontains=term)
+            | Q(seller__photographer_profile__business_name__icontains=term)
+            | Q(seller__full_name__icontains=term)
         ).distinct()
 
     def filter_on_sale(self, queryset, name, value):

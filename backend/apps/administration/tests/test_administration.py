@@ -842,3 +842,34 @@ def test_platform_totals_count_completed_bookings_only(completed_booking, bookin
     assert totals["bookings_completed"] == 1
     # GMV counts completed shoots only — accepted work has not been earned yet.
     assert Decimal(totals["booking_gmv"]) == completed_booking.total_price
+
+
+def test_rejecting_a_pending_listing_takes_it_out_of_the_queue(
+    admin_client_authed, product
+):
+    product.is_approved = False
+    product.save(update_fields=["is_approved"])
+
+    response = admin_client_authed.post(
+        f"{URL}products/{product.pk}/remove/",
+        {"reason": "Photos do not show the actual product."},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    product.refresh_from_db()
+    assert product.is_published is False
+    assert product.is_approved is False
+    queue = admin_client_authed.get(f"{URL}products/").json()["data"]
+    assert product.pk not in {row["id"] for row in queue}
+
+
+def test_the_product_queue_carries_photos_and_description(admin_client_authed, product):
+    product.is_approved = False
+    product.save(update_fields=["is_approved"])
+
+    row = admin_client_authed.get(f"{URL}products/").json()["data"][0]
+
+    assert row["description"] == product.description
+    assert "thumbnail_url" in row
+    assert isinstance(row["preview_image_urls"], list)

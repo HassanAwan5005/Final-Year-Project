@@ -26,7 +26,6 @@ import time
 from pathlib import Path
 
 import joblib
-import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix
@@ -107,7 +106,7 @@ def train(max_rows: int = 40000, random_state: int = 42) -> dict:
     print("\n  confusion matrix (rows = true, cols = predicted):")
     labels = ["NEGATIVE", "NEUTRAL", "POSITIVE"]
     cm = confusion_matrix(y_test, y_pred, labels=labels)
-    print(f"    {'':<10}" + "".join(f"{l[:4]:>8}" for l in labels))
+    print(f"    {'':<10}" + "".join(f"{name[:4]:>8}" for name in labels))
     for label, row in zip(labels, cm):
         print(f"    {label:<10}" + "".join(f"{v:>8}" for v in row))
 

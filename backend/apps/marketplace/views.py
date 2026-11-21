@@ -23,6 +23,7 @@ from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status as http
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet, ReadOnlyModelViewSet
@@ -30,7 +31,7 @@ from rest_framework.viewsets import GenericViewSet, ReadOnlyModelViewSet
 from apps.core.mixins import MessageResponseMixin, MultiSerializerMixin
 from apps.marketplace import selectors, services
 from apps.marketplace.filters import ProductFilterSet
-from apps.marketplace.models import CartItem, DigitalProduct, ProductFile
+from apps.marketplace.models import CartItem, DigitalProduct
 from apps.marketplace.serializers import (
     AddToCartSerializer,
     CartSerializer,
@@ -41,6 +42,7 @@ from apps.marketplace.serializers import (
     OrderSerializer,
     ProductDetailSerializer,
     ProductListSerializer,
+    SellerProductCreateSerializer,
     SellerProductSerializer,
     SellerSummarySerializer,
 )
@@ -294,7 +296,11 @@ class OrderViewSet(MessageResponseMixin, MultiSerializerMixin, GenericViewSet):
     @action(detail=False, methods=["post"])
     def checkout(self, request):
         key = (request.headers.get("Idempotency-Key") or "").strip()[:64]
-        order = services.checkout(request.user, idempotency_key=key)
+        serializer = CheckoutSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        order = services.checkout(
+            request.user, idempotency_key=key, **serializer.validated_data
+        )
         return Response(
             OrderSerializer(order, context=self.get_serializer_context()).data,
             status=http.HTTP_201_CREATED,
@@ -400,11 +406,10 @@ def download_file(request, token: str):
 @extend_schema(tags=["Marketplace"])
 class SellerProductViewSet(MessageResponseMixin, GenericViewSet):
     """
-    A photographer's own catalogue and sales.
+    A seller's own catalogue and sales — buyers and photographers alike.
 
-    Read-only for now: uploading products needs private-file handling and an
-    admin moderation gate, which is scoped separately. Sellers can still see
-    what is live and what it earned.
+    `create` lists a new product from the Sell screen. It goes into the admin
+    moderation queue and appears in the shop once approved.
     """
 
     permission_classes = [IsAuthenticated]
@@ -414,17 +419,19 @@ class SellerProductViewSet(MessageResponseMixin, GenericViewSet):
     success_messages = {
         "list": "Your products retrieved",
         "summary": "Sales summary retrieved",
+        "create": "Submitted — your product will appear in the shop once approved",
     }
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
-    def _profile(self):
-        profile = getattr(self.request.user, "photographer_profile", None)
-        if profile is None:
-            raise NotFound("Only photographer accounts have a product catalogue.")
-        return profile
+    def _seller(self):
+        user = self.request.user
+        if getattr(user, "role", None) not in ("BUYER", "PHOTOGRAPHER"):
+            raise NotFound("Only buyer and photographer accounts have a product catalogue.")
+        return user
 
-    @extend_schema(summary="Products this photographer sells, including drafts")
+    @extend_schema(summary="Products this seller lists, including drafts")
     def list(self, request):
-        rows = selectors.products_by_seller(self._profile())
+        rows = selectors.products_by_seller(self._seller())
         return Response(
             SellerProductSerializer(
                 rows, many=True, context=self.get_serializer_context()
@@ -436,6 +443,21 @@ class SellerProductViewSet(MessageResponseMixin, GenericViewSet):
     def summary(self, request):
         return Response(
             SellerSummarySerializer(
-                selectors.seller_sales_summary(self._profile())
+                selectors.seller_sales_summary(self._seller())
             ).data
+        )
+
+    @extend_schema(
+        summary="List a product for sale",
+        request=SellerProductCreateSerializer,
+        responses={201: SellerProductSerializer},
+    )
+    def create(self, request):
+        self._seller()
+        serializer = SellerProductCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        product = services.create_listing(request.user, **serializer.validated_data)
+        return Response(
+            SellerProductSerializer(product, context=self.get_serializer_context()).data,
+            status=http.HTTP_201_CREATED,
         )

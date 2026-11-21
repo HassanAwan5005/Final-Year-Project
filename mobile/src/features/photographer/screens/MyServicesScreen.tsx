@@ -177,7 +177,7 @@ export function MyServicesScreen({ onBack }: { onBack: () => void }) {
                 These are what buyers book. Your profile shows the cheapest as
                 "from".
               </Text>
-            ) : null
+            ) : undefined
           }
           ListEmptyComponent={
             <EmptyState
@@ -191,7 +191,7 @@ export function MyServicesScreen({ onBack }: { onBack: () => void }) {
           refreshControl={
             <RefreshControl
               refreshing={services.isRefetching}
-              onRefresh={() => services.refetch()}
+              onRefresh={() => { void services.refetch(); }}
               tintColor={colors.gold}
             />
           }

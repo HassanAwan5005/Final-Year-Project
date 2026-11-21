@@ -1,9 +1,9 @@
+import { StatusBar } from 'expo-status-bar';
 import React from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  StatusBar,
   StyleSheet,
   View,
   ViewStyle,
@@ -50,7 +50,7 @@ export function Screen({
 
   return (
     <SafeAreaView style={[styles.safe, style]} edges={['top', 'left', 'right']}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
+      <StatusBar style="light" />
       <KeyboardAvoidingView
         style={styles.flex}
         // 'padding' is correct on iOS; 'height' is what actually works on

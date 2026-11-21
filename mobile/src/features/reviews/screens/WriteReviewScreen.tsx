@@ -16,7 +16,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ApiError } from '../../../api/client';
 import { Button } from '../../../components/ui/Button';
 import { colors, radius, spacing, typography } from '../../../theme';
-import { useCreateProductReview, useCreateReview } from '../hooks/useReviews';
+import type { ProductReview, Review } from '../../../types/models';
+import {
+  useCreateProductReview,
+  useCreateReview,
+  useUpdateProductReview,
+  useUpdateReview,
+} from '../hooks/useReviews';
 
 const MAX_PHOTOS = 5;
 
@@ -30,7 +36,19 @@ const SUB_RATINGS = [
 
 type Target =
   | { kind: 'booking'; bookingId: number; subject: string; detail?: string }
-  | { kind: 'product'; orderItemId: number; subject: string; detail?: string };
+  | { kind: 'product'; orderItemId: number; subject: string; detail?: string }
+  | { kind: 'edit'; review: Review; subject: string; detail?: string }
+  | { kind: 'editProduct'; review: ProductReview; subject: string; detail?: string };
+
+/** Prefill the sub-rating stars from an existing review. */
+function initialSubRatings(target: Target): Record<string, number> {
+  if (target.kind !== 'edit') return {};
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(target.review.sub_ratings ?? {})) {
+    if (typeof value === 'number') out[`rating_${key}`] = value;
+  }
+  return out;
+}
 
 /**
  * The review form — one screen for both a shoot and a purchased product.
@@ -58,16 +76,26 @@ export function WriteReviewScreen({
   onBack: () => void;
   onDone: () => void;
 }) {
-  const [rating, setRating] = useState(0);
-  const [title, setTitle] = useState('');
-  const [comment, setComment] = useState('');
-  const [subRatings, setSubRatings] = useState<Record<string, number>>({});
+  const editing =
+    target.kind === 'edit' || target.kind === 'editProduct' ? target.review : null;
+  const [rating, setRating] = useState(editing?.rating ?? 0);
+  const [title, setTitle] = useState(editing?.title ?? '');
+  const [comment, setComment] = useState(editing?.comment ?? '');
+  const [subRatings, setSubRatings] = useState<Record<string, number>>(() =>
+    initialSubRatings(target),
+  );
   const [photos, setPhotos] = useState<ImagePicker.ImagePickerAsset[]>([]);
   const [showDetail, setShowDetail] = useState(false);
 
   const createReview = useCreateReview();
   const createProductReview = useCreateProductReview();
-  const busy = createReview.isPending || createProductReview.isPending;
+  const updateReview = useUpdateReview();
+  const updateProductReview = useUpdateProductReview();
+  const busy =
+    createReview.isPending ||
+    createProductReview.isPending ||
+    updateReview.isPending ||
+    updateProductReview.isPending;
 
   const needsComment = rating > 0 && rating <= 2 && comment.trim().length === 0;
   const canSubmit = rating > 0 && !needsComment && !busy;
@@ -94,11 +122,38 @@ export function WriteReviewScreen({
 
   const fail = (error: unknown) =>
     Alert.alert(
-      'Could not post your review',
+      editing ? 'Could not update your review' : 'Could not post your review',
       (error as ApiError)?.message ?? 'Please try again.',
     );
 
   const submit = () => {
+    if (target.kind === 'editProduct') {
+      updateProductReview.mutate(
+        {
+          id: target.review.id,
+          rating,
+          title: title.trim(),
+          comment: comment.trim(),
+        },
+        { onSuccess: onDone, onError: fail },
+      );
+      return;
+    }
+
+    if (target.kind === 'edit') {
+      updateReview.mutate(
+        {
+          id: target.review.id,
+          rating,
+          title: title.trim(),
+          comment: comment.trim(),
+          ...subRatings,
+        },
+        { onSuccess: onDone, onError: fail },
+      );
+      return;
+    }
+
     if (target.kind === 'product') {
       createProductReview.mutate(
         {
@@ -136,7 +191,7 @@ export function WriteReviewScreen({
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </Pressable>
         <View style={styles.headerBody}>
-          <Text style={styles.title}>Write a review</Text>
+          <Text style={styles.title}>{editing ? 'Edit your review' : 'Write a review'}</Text>
           <Text style={styles.subtitle} numberOfLines={1}>
             {target.subject}
           </Text>
@@ -212,7 +267,7 @@ export function WriteReviewScreen({
         </View>
 
         {/* ─── Booking-only extras ───────────────────────────────────────── */}
-        {target.kind === 'booking' ? (
+        {target.kind === 'booking' || target.kind === 'edit' ? (
           <>
             <Pressable
               style={styles.disclosure}
@@ -267,6 +322,7 @@ export function WriteReviewScreen({
               </View>
             ) : null}
 
+            {target.kind === 'booking' ? (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Add photos (optional)</Text>
               <Text style={styles.hint}>
@@ -295,18 +351,18 @@ export function WriteReviewScreen({
                 ) : null}
               </View>
             </View>
+            ) : null}
           </>
         ) : null}
 
         <Text style={styles.footnote}>
-          You can correct a review for 24 hours after posting — and until the photographer
-          replies to it.
+          You can edit or delete your review any time from My Reviews.
         </Text>
       </ScrollView>
 
       <View style={styles.bar}>
         <Button
-          label="Post review"
+          label={editing ? 'Save changes' : 'Post review'}
           onPress={submit}
           disabled={!canSubmit}
           loading={busy}

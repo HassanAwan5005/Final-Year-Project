@@ -161,6 +161,35 @@ def test_taken_times_are_removed(photographer, booking):
 
     times = selectors.suggested_start_times(photographer, booking.event_date, 2)
     assert "14:00" not in times
+    assert "13:00" not in times
+    assert "15:00" not in times
+    assert times == ["09:00", "10:00", "11:00", "12:00"]
+
+
+def test_shoot_duration_blocks_overlapping_hours(photographer, make_booking):
+    """
+    If a 4-hour shoot is booked starting at 11:00 (11:00 - 15:00),
+    a new 4-hour shoot cannot start anywhere between 08:00 and 14:00.
+    Only times finishing before 11:00 or starting at/after 15:00 are available.
+    """
+    date = working_date(12)
+    AvailabilityRule.objects.filter(
+        photographer=photographer, weekday=date.weekday()
+    ).update(start_time=time(8, 0), end_time=time(20, 0), max_bookings=3)
+
+    make_booking(event_date=date, start_time=time(11, 0), duration_hours=4)
+
+    # For a 4-hour shoot:
+    times = selectors.suggested_start_times(photographer, date, duration_hours=4)
+
+    # 11:00, 12:00, 13:00, 14:00 are during or clashing with the shoot
+    # 08:00 - 12:00 (clash), 09:00 - 13:00 (clash), 10:00 - 14:00 (clash)
+    # Available should be 15:00 and 16:00 (16:00 - 20:00)
+    assert "11:00" not in times
+    assert "12:00" not in times
+    assert "13:00" not in times
+    assert "14:00" not in times
+    assert times == ["15:00", "16:00"]
 
 
 def test_an_unavailable_date_offers_nothing(photographer):

@@ -1,16 +1,23 @@
 """Portfolio routes — mounted at /api/v1/portfolio/"""
 
-from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from apps.portfolio.views import PortfolioAlbumViewSet, PortfolioImageViewSet
+from apps.portfolio.views import (
+    MyPortfolioViewSet,
+    PhotographerPortfolioViewSet,
+    PortfolioAlbumViewSet,
+    PortfolioImageViewSet,
+)
 
 app_name = "portfolio"
 
 router = DefaultRouter()
-router.register(r'albums', PortfolioAlbumViewSet, basename='album')
-router.register(r'images', PortfolioImageViewSet, basename='image')
+# Studio: the signed-in photographer manages their own portfolio.
+router.register("me", MyPortfolioViewSet, basename="my-portfolio")
+# Public: anyone browses a photographer's portfolio.
+router.register("photographers", PhotographerPortfolioViewSet, basename="portfolio")
+# Read-only browse used by PortfolioScreen.
+router.register("albums", PortfolioAlbumViewSet, basename="album")
+router.register("images", PortfolioImageViewSet, basename="image")
 
-urlpatterns = [
-    path('', include(router.urls)),
-]
+urlpatterns = router.urls

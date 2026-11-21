@@ -40,11 +40,17 @@ def purchasable_products() -> QuerySet[DigitalProduct]:
         is_published=True,
         is_approved=True,
         is_deleted=False,
-        seller__is_approved=True,
-        seller__is_deleted=False,
-        seller__user__is_active=True,
-        seller__user__is_blocked=False,
-    ).select_related("seller", "seller__user", "category")
+        seller__is_active=True,
+        seller__is_blocked=False,
+    ).filter(
+        # Photographer sellers must still be approved and not deleted; buyer
+        # sellers have no photographer profile and only need an active account.
+        Q(seller__photographer_profile__isnull=True)
+        | Q(
+            seller__photographer_profile__is_approved=True,
+            seller__photographer_profile__is_deleted=False,
+        )
+    ).select_related("seller", "seller__photographer_profile", "category")
 
 
 def products_for_list() -> QuerySet[DigitalProduct]:
@@ -82,10 +88,10 @@ def bestsellers(limit: int = 10):
     return purchasable_products().order_by("-sales_count", "-avg_rating")[:limit]
 
 
-def products_by_seller(photographer) -> QuerySet[DigitalProduct]:
-    """A photographer's own catalogue — including unpublished drafts."""
+def products_by_seller(user) -> QuerySet[DigitalProduct]:
+    """A seller's own catalogue — including unpublished drafts."""
     return (
-        DigitalProduct.objects.filter(seller=photographer, is_deleted=False)
+        DigitalProduct.objects.filter(seller=user, is_deleted=False)
         .select_related("category")
         .order_by("-created_at")
     )
@@ -169,7 +175,7 @@ def owns_product(user, product) -> bool:
 def get_cart(user) -> QuerySet[CartItem]:
     return (
         CartItem.objects.filter(user=user)
-        .select_related("product", "product__seller", "product__seller__user")
+        .select_related("product", "product__seller", "product__seller__photographer_profile")
         .order_by("-created_at")
     )
 
@@ -202,7 +208,6 @@ def cart_summary(user) -> dict:
         "subtotal": payable,
         "total": payable,
         "unavailable_count": blocked,
-        "wallet_balance": wallet_balance(user),
     }
 
 
@@ -232,7 +237,7 @@ def get_order(user, order_id: int) -> Order | None:
             Prefetch(
                 "items",
                 queryset=OrderItem.objects.select_related(
-                    "product", "seller", "seller__user"
+                    "product", "seller", "seller__photographer_profile"
                 ),
             )
         )
@@ -249,7 +254,9 @@ def get_purchases(user) -> QuerySet[OrderItem]:
     """
     return (
         OrderItem.objects.filter(order__buyer=user, order__status=OrderStatus.PAID)
-        .select_related("order", "product", "product__category", "seller", "seller__user")
+        .select_related(
+            "order", "product", "product__category", "seller", "seller__photographer_profile"
+        )
         .prefetch_related("product__files")
         .order_by("-order__created_at")
     )
@@ -277,16 +284,16 @@ def find_download_token(token: str) -> DownloadToken | None:
 # ═══════════════════════════════════════════════════════════════════════════
 # SELLER
 # ═══════════════════════════════════════════════════════════════════════════
-def seller_sales_summary(photographer) -> dict:
-    """Headline numbers for the photographer's own products view."""
+def seller_sales_summary(user) -> dict:
+    """Headline numbers for the seller's own products view."""
     agg = OrderItem.objects.filter(
-        seller=photographer, order__status=OrderStatus.PAID
+        seller=user, order__status=OrderStatus.PAID
     ).aggregate(
         sales=Count("id"),
         revenue=Sum("price"),
         earnings=Sum("seller_earning"),
     )
-    products = DigitalProduct.objects.filter(seller=photographer, is_deleted=False)
+    products = DigitalProduct.objects.filter(seller=user, is_deleted=False)
     return {
         "products_total": products.count(),
         "products_live": products.filter(is_published=True, is_approved=True).count(),
@@ -296,9 +303,9 @@ def seller_sales_summary(photographer) -> dict:
     }
 
 
-def seller_recent_sales(photographer, limit: int = 10) -> QuerySet[OrderItem]:
+def seller_recent_sales(user, limit: int = 10) -> QuerySet[OrderItem]:
     return (
-        OrderItem.objects.filter(seller=photographer, order__status=OrderStatus.PAID)
+        OrderItem.objects.filter(seller=user, order__status=OrderStatus.PAID)
         .select_related("order", "order__buyer", "product")
         .order_by("-created_at")[:limit]
     )

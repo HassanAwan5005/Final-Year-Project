@@ -11,7 +11,18 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PY="$ROOT/backend/.venv/bin/python"
+# The venv keeps executables in Scripts/ on Windows (Git Bash) and bin/ elsewhere.
+if [ -x "$ROOT/backend/.venv/Scripts/python.exe" ]; then
+  # Windows Python ends lines with \r\n. Every "$PY" call below is captured
+  # with $(...), which strips the \n but keeps the \r — so an email read from
+  # the database becomes "name@x.pk\r" and the login with it fails. "$PY"
+  # therefore names this wrapper, which strips the \r once for all callers.
+  PY_BIN="$ROOT/backend/.venv/Scripts/python.exe"
+  py_run() { "$PY_BIN" "$@" | tr -d '\r'; }
+  PY="py_run"
+else
+  PY="$ROOT/backend/.venv/bin/python"
+fi
 API="http://127.0.0.1:8000/api/v1"
 
 GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; DIM=$'\033[2m'; BOLD=$'\033[1m'; OFF=$'\033[0m'
@@ -49,6 +60,23 @@ except Exception as exc:
 }
 
 section() { echo; echo "${BOLD}$1${OFF}"; }
+
+# Scratch files. On Windows the venv's Python cannot open Git Bash's /tmp, so
+# the directory is converted to a native C:/... path both sides understand.
+TMP_DIR=$(mktemp -d)
+command -v cygpath >/dev/null 2>&1 && TMP_DIR=$(cygpath -m "$TMP_DIR")
+
+# "<id> <email>" of the first listed photographer whose seeded password still
+# works. Someone may have changed a seeded account's password in the app; the
+# smoke test must not fail every photographer login because of it.
+seeded_photographer() {
+  "$PY" "$ROOT/backend/manage.py" shell -c "
+from apps.profiles import selectors
+for p in selectors.photographers_for_list().select_related('user')[:50]:
+    if p.user.check_password('photographer123'):
+        print(p.pk, p.user.email)
+        break" 2>/dev/null | tail -1
+}
 
 echo
 echo "${BOLD}SnapSphere API smoke test${OFF}"
@@ -203,10 +231,7 @@ check "seed data present"          "True" "$([ "${USERS:-0}" -gt 400 ] && echo T
 # wrong actor, accept it, and confirm the slot is then blocked.
 section "7. Booking lifecycle"
 
-PHOTOG_ID=$(curl -s "$API/profiles/photographers/?page_size=1" | jget "d['data'][0]['id']")
-PHOTOG_EMAIL=$("$PY" "$ROOT/backend/manage.py" shell -c "
-from apps.profiles.models import PhotographerProfile
-print(PhotographerProfile.objects.get(pk=$PHOTOG_ID).user.email)" 2>/dev/null | tail -1)
+read -r PHOTOG_ID PHOTOG_EMAIL <<< "$(seeded_photographer)"
 
 CAL=$(curl -s "$API/availability/photographers/$PHOTOG_ID/?days=60")
 check "availability calendar serves" "True" "$(echo "$CAL" | jget "d['success']")"
@@ -426,19 +451,19 @@ print(hit[0]["reason"] if hit else "NOT_IN_WINDOW")' 2>/dev/null)"
 from PIL import Image
 im = Image.new('RGB', (1400, 900), (120, 90, 60))
 exif = im.getexif(); exif[0x8825] = {1:'N', 2:(31,32,0)}; exif[0x010F] = 'SmokePhone'
-im.save('/tmp/snapsphere_smoke.jpg', exif=exif)" 2>/dev/null
+im.save('$TMP_DIR/snapsphere_smoke.jpg', exif=exif)" 2>/dev/null
 UPLOADED=$(curl -s -X POST "$API/portfolio/me/" -H "$STUDIO_AUTH" \
-  -F "image=@/tmp/snapsphere_smoke.jpg;type=image/jpeg" -F "caption=Smoke test photo")
+  -F "image=@$TMP_DIR/snapsphere_smoke.jpg;type=image/jpeg" -F "caption=Smoke test photo")
 check "portfolio upload"             "1400" "$(echo "$UPLOADED" | jget "d['data']['width']")"
 IMAGE_ID=$(echo "$UPLOADED" | jget "d['data']['id']")
 
 check "three renditions generated"   "True" "$(echo "$UPLOADED" | jget "bool(d['data']['thumbnail_url']) and bool(d['data']['image_large_url']) and d['data']['thumbnail_url'] != d['data']['image_large_url']")"
 
 THUMB_URL=$(echo "$UPLOADED" | jget "d['data']['thumbnail_url']")
-curl -s -o /tmp/snapsphere_thumb.webp "$THUMB_URL"
+curl -s -o $TMP_DIR/snapsphere_thumb.webp "$THUMB_URL"
 check "EXIF stripped on upload"      "True" "$("$PY" -c "
 from PIL import Image
-print(dict(Image.open('/tmp/snapsphere_thumb.webp').getexif()) == {})" 2>/dev/null)"
+print(dict(Image.open('$TMP_DIR/snapsphere_thumb.webp').getexif()) == {})" 2>/dev/null)"
 
 check "photo reaches the public grid" "True" "$(curl -s "$API/portfolio/photographers/$STUDIO_ID/images/" \
   | jget "any(r['id'] == $IMAGE_ID for r in d['data'])")"
@@ -458,7 +483,7 @@ check "buyers have no studio"         "403" "$(curl -s -o /dev/null -w "%{http_c
 curl -s -o /dev/null -X DELETE "$API/catalog/my-services/$SERVICE_ID/" -H "$STUDIO_AUTH"
 curl -s -o /dev/null -X DELETE "$API/availability/me/blackouts/$BLOCK_ID/" -H "$STUDIO_AUTH"
 curl -s -o /dev/null -X DELETE "$API/portfolio/me/$IMAGE_ID/" -H "$STUDIO_AUTH"
-rm -f /tmp/snapsphere_smoke.jpg /tmp/snapsphere_thumb.webp
+rm -rf "$TMP_DIR"
 
 # ─── 10. Analytics dashboard (Module 15) ─────────────────────────────────────
 # The dashboard mixes two speeds on purpose: headline counters are computed
@@ -510,10 +535,7 @@ REV_BUYER=$(curl -s -X POST "$API/auth/login/" -H "Content-Type: application/jso
   -d '{"email":"buyer1@snapsphere.pk","password":"buyer12345"}' | jget "d['data']['tokens']['access']")
 REV_BUYER_AUTH="Authorization: Bearer $REV_BUYER"
 
-R_PHOTOG_ID=$(curl -s "$API/profiles/photographers/?page_size=1" | jget "d['data'][0]['id']")
-R_PHOTOG_EMAIL=$("$PY" "$ROOT/backend/manage.py" shell -c "
-from apps.profiles.models import PhotographerProfile
-print(PhotographerProfile.objects.get(pk=$R_PHOTOG_ID).user.email)" 2>/dev/null | tail -1)
+read -r R_PHOTOG_ID R_PHOTOG_EMAIL <<< "$(seeded_photographer)"
 R_PHOTOG=$(curl -s -X POST "$API/auth/login/" -H "Content-Type: application/json" \
   -d "{\"email\":\"$R_PHOTOG_EMAIL\",\"password\":\"photographer123\"}" | jget "d['data']['tokens']['access']")
 R_PHOTOG_AUTH="Authorization: Bearer $R_PHOTOG"
@@ -588,7 +610,7 @@ check "own inbox exposes sentiment"  "True" "$(curl -s "$API/reviews/received/" 
 check "buyer refused that inbox"     "403" "$(curl -s -o /dev/null -w "%{http_code}" "$API/reviews/received/" -H "$REV_BUYER_AUTH")"
 
 R_REPLY=$(curl -s -X POST "$API/reviews/$R_ID/reply/" -H "$R_PHOTOG_AUTH" \
-  -H "Content-Type: application/json" -d '{"comment":"Thank you — it was a pleasure to shoot."}')
+  -H "Content-Type: application/json" -d '{"comment":"Thank you - it was a pleasure to shoot."}')
 check "photographer replies"         "True" "$(echo "$R_REPLY" | jget "d['data']['reply'] is not None")"
 check "second reply refused"         "409"  "$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/reviews/$R_ID/reply/" \
   -H "$R_PHOTOG_AUTH" -H "Content-Type: application/json" -d '{"comment":"Second thoughts."}')"

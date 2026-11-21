@@ -23,7 +23,6 @@ def get_wishlist(user) -> QuerySet[WishlistItem]:
             "photographer__user",
             "product",
             "product__seller",
-            "product__seller__user",
         )
         .prefetch_related("photographer__categories")
         .order_by("-created_at")

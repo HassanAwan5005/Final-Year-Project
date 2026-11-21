@@ -29,7 +29,6 @@ import {
   useMyProfile,
   useSellerSummary,
   useUpdateProfile,
-  useWallet,
   useWishlist,
 } from '../../shop/hooks/useShop';
 
@@ -40,11 +39,10 @@ import {
  * ----------------------
  * The API returns a buyer profile or a photographer profile depending on who
  * asks, and the sections below switch on that. Two separate screens would
- * duplicate the header, the wallet card and every settings row — and those
+ * duplicate the header, the stats and every settings row — and those
  * are the parts most likely to drift apart.
  */
 export function ProfileScreen({
-  onOpenWallet,
   onOpenWishlist,
   onOpenPurchases,
   onOpenBookings,
@@ -57,7 +55,6 @@ export function ProfileScreen({
   onOpenNotifications,
   onOpenNotificationSettings,
 }: {
-  onOpenWallet: () => void;
   onOpenWishlist: () => void;
   onOpenPurchases: () => void;
   onOpenBookings: () => void;
@@ -76,7 +73,6 @@ export function ProfileScreen({
   const logout = useAuthStore((s) => s.logout);
 
   const profile = useMyProfile();
-  const wallet = useWallet();
   const wishlist = useWishlist();
   const updateProfile = useUpdateProfile();
 
@@ -120,7 +116,6 @@ export function ProfileScreen({
             refreshing={profile.isRefetching}
             onRefresh={() => {
               profile.refetch();
-              wallet.refetch();
             }}
             tintColor={colors.gold}
           />
@@ -128,11 +123,13 @@ export function ProfileScreen({
       >
         {/* ─── Identity ────────────────────────────────────────────────── */}
         <View style={styles.header}>
-          <Avatar
-            uri={user?.avatar_url}
-            name={user?.full_name ?? '?'}
-            size={64}
-          />
+          <Pressable onPress={onEditProfile} disabled={!onEditProfile}>
+            <Avatar
+              uri={user?.avatar_url}
+              name={user?.full_name ?? '?'}
+              size={64}
+            />
+          </Pressable>
           <View style={styles.headerBody}>
             <Text style={styles.name}>{user?.full_name}</Text>
             <Text style={styles.email}>{user?.email}</Text>
@@ -150,6 +147,17 @@ export function ProfileScreen({
               ) : null}
             </View>
           </View>
+          {onEditProfile ? (
+            <Pressable
+              onPress={onEditProfile}
+              style={styles.editBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Edit profile"
+            >
+              <Ionicons name="create-outline" size={16} color={colors.gold} />
+              <Text style={styles.editBtnText}>Edit</Text>
+            </Pressable>
+          ) : null}
         </View>
 
         {photographerProfile && !photographerProfile.is_approved ? (
@@ -161,24 +169,6 @@ export function ProfileScreen({
             </Text>
           </View>
         ) : null}
-
-        {/* ─── Wallet ──────────────────────────────────────────────────── */}
-        <Pressable onPress={onOpenWallet} style={styles.walletCard}>
-          <View style={styles.walletTop}>
-            <Text style={styles.walletLabel}>Wallet balance</Text>
-            <Ionicons name="chevron-forward" size={16} color={colors.dim} />
-          </View>
-          <Text style={styles.walletAmount}>
-            {formatPKR(wallet.data?.balance ?? '0')}
-          </Text>
-          {wallet.data?.pending_topups ? (
-            <Text style={styles.walletPending}>
-              {wallet.data.pending_topups} top-up awaiting verification
-            </Text>
-          ) : (
-            <Text style={styles.walletHint}>Tap to add funds or see the ledger</Text>
-          )}
-        </Pressable>
 
         {/* ─── Stats ───────────────────────────────────────────────────── */}
         {buyerProfile ? (
@@ -319,9 +309,31 @@ export function ProfileScreen({
         </Section>
 
         <Section title="Account">
-          <Row icon="person-outline" label={user?.full_name ?? 'Profile'} muted />
-          <Row icon="call-outline" label={user?.phone || 'No phone added'} muted />
-          <Row icon="location-outline" label={user?.city || 'No city set'} muted />
+          {onEditProfile ? (
+            <Row
+              icon="create-outline"
+              label="Edit profile & account"
+              onPress={onEditProfile}
+            />
+          ) : null}
+          <Row
+            icon="person-outline"
+            label={user?.full_name ?? 'Profile'}
+            onPress={onEditProfile}
+            muted={!onEditProfile}
+          />
+          <Row
+            icon="call-outline"
+            label={user?.phone || 'No phone added'}
+            onPress={onEditProfile}
+            muted={!onEditProfile}
+          />
+          <Row
+            icon="location-outline"
+            label={user?.city || 'No city set'}
+            onPress={onEditProfile}
+            muted={!onEditProfile}
+          />
           {onOpenNotifications ? (
             <Row
               icon="notifications-outline"
@@ -406,6 +418,22 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   content: { padding: spacing.xl, paddingBottom: spacing.huge },
   header: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
+  editBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    backgroundColor: colors.card,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  editBtnText: {
+    ...typography.caption,
+    color: colors.gold,
+    fontWeight: '600',
+  },
   headerBody: { flex: 1 },
   name: { ...typography.h2, color: colors.text },
   email: { ...typography.caption, color: colors.sub },
@@ -436,23 +464,6 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
   },
   pendingText: { ...typography.caption, color: colors.amber, flex: 1, lineHeight: 18 },
-  walletCard: {
-    backgroundColor: colors.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.borderMid,
-    padding: spacing.lg,
-    marginTop: spacing.xl,
-  },
-  walletTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  walletLabel: { ...typography.caption, color: colors.sub },
-  walletAmount: { ...typography.display, color: colors.gold, marginTop: spacing.xs },
-  walletHint: { ...typography.tiny, color: colors.dim, marginTop: spacing.xs },
-  walletPending: { ...typography.tiny, color: colors.amber, marginTop: spacing.xs },
   stats: {
     flexDirection: 'row',
     marginTop: spacing.lg,

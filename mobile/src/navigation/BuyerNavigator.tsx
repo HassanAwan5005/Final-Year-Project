@@ -17,14 +17,18 @@ import { MyReviewsScreen } from '../features/reviews/screens/MyReviewsScreen';
 import { PhotographerReviewsScreen } from '../features/reviews/screens/PhotographerReviewsScreen';
 import { WriteReviewScreen } from '../features/reviews/screens/WriteReviewScreen';
 import { PhotographerDetailScreen } from '../features/photographer/screens/PhotographerDetailScreen';
+import { EditProfileScreen } from '../features/profile/screens/EditProfileScreen';
 import { ProfileScreen } from '../features/profile/screens/ProfileScreen';
-import { WalletScreen } from '../features/profile/screens/WalletScreen';
 import { WishlistScreen } from '../features/profile/screens/WishlistScreen';
 import { CartScreen } from '../features/shop/screens/CartScreen';
 import { ProductDetailScreen } from '../features/shop/screens/ProductDetailScreen';
 import { PurchasesScreen } from '../features/shop/screens/PurchasesScreen';
+import { SellerProductsScreen } from '../features/shop/screens/SellerProductsScreen';
+import { SellProductScreen } from '../features/shop/screens/SellProductScreen';
+import { ShopHomeScreen } from '../features/shop/screens/ShopHomeScreen';
 import { ShopScreen } from '../features/shop/screens/ShopScreen';
 import { colors } from '../theme';
+import type { ProductReview, Review } from '../types/models';
 import { useTabBarOptions } from './tabBarStyle';
 
 export type BuyerTabParams = {
@@ -39,7 +43,7 @@ export type BuyerTabParams = {
  * Detail, form and checkout screens live in a STACK ABOVE the tabs.
  *
  * If they were tab screens the bottom bar would stay visible and the sticky
- * action bars ("Book now", "Pay from wallet") would sit on top of it. Pushing
+ * action bars ("Book now", "Place order") would sit on top of it. Pushing
  * them over the whole tab navigator also means the same product or booking is
  * reachable from several tabs and always renders the same screen with a
  * working back button.
@@ -50,10 +54,13 @@ export type BuyerStackParams = {
   CreateBooking: { photographerId: number; serviceId?: number };
   BookingDetail: { bookingId: number };
   ProductDetail: { slug: string };
+  ShopBrowse: undefined;
+  SellProduct: undefined;
+  SellerProducts: undefined;
   Cart: undefined;
   Purchases: undefined;
-  Wallet: undefined;
   Wishlist: undefined;
+  EditProfile: undefined;
   // ─── Module 9 ───────────────────────────────────────────────────────────
   MyReviews: undefined;
   PhotographerReviews: { photographerId: number; name?: string };
@@ -74,6 +81,18 @@ export type BuyerStackParams = {
     | {
         kind: 'product';
         orderItemId: number;
+        subject: string;
+        detail?: string;
+      }
+    | {
+        kind: 'edit';
+        review: Review;
+        subject: string;
+        detail?: string;
+      }
+    | {
+        kind: 'editProduct';
+        review: ProductReview;
         subject: string;
         detail?: string;
       };
@@ -113,7 +132,6 @@ function BuyerTabs({ navigation }: any) {
     navigation.navigate('PhotographerDetail', { photographerId });
   const openBooking = (bookingId: number) =>
     navigation.navigate('BookingDetail', { bookingId });
-  const openProduct = (slug: string) => navigation.navigate('ProductDetail', { slug });
 
   return (
     <Tab.Navigator
@@ -166,9 +184,10 @@ function BuyerTabs({ navigation }: any) {
 
       <Tab.Screen name="Shop">
         {() => (
-          <ShopScreen
-            onOpenProduct={openProduct}
-            onOpenCart={() => navigation.navigate('Cart')}
+          <ShopHomeScreen
+            onBuy={() => navigation.navigate('ShopBrowse')}
+            onSell={() => navigation.navigate('SellProduct')}
+            onOpenMyListings={() => navigation.navigate('SellerProducts')}
           />
         )}
       </Tab.Screen>
@@ -176,7 +195,6 @@ function BuyerTabs({ navigation }: any) {
       <Tab.Screen name="Profile">
         {({ navigation: tabNav }) => (
           <ProfileScreen
-            onOpenWallet={() => navigation.navigate('Wallet')}
             onOpenWishlist={() => navigation.navigate('Wishlist')}
             onOpenPurchases={() => navigation.navigate('Purchases')}
             onOpenBookings={() => tabNav.navigate('Bookings')}
@@ -186,6 +204,7 @@ function BuyerTabs({ navigation }: any) {
             onOpenNotificationSettings={() =>
               navigation.navigate('NotificationSettings')
             }
+            onEditProfile={() => navigation.navigate('EditProfile')}
           />
         )}
       </Tab.Screen>
@@ -220,6 +239,14 @@ export function BuyerNavigator() {
               navigation.navigate('PhotographerReviews', {
                 photographerId: route.params.photographerId,
                 name,
+              })
+            }
+            onWriteReview={(pending) =>
+              navigation.navigate('WriteReview', {
+                kind: 'booking',
+                bookingId: pending.booking_id,
+                subject: pending.photographer_name,
+                detail: `${pending.service_name} · ${pending.event_date}`,
               })
             }
             onMessage={(userId, name) =>
@@ -295,7 +322,35 @@ export function BuyerNavigator() {
             slug={route.params.slug}
             onBack={() => navigation.goBack()}
             onOpenCart={() => navigation.navigate('Cart')}
-            onTopUp={() => navigation.navigate('Wallet')}
+          />
+        )}
+      </Stack.Screen>
+
+      {/* ─── Shop: Buy / Sell ────────────────────────────────────────────── */}
+      <Stack.Screen name="ShopBrowse">
+        {({ navigation }) => (
+          <ShopScreen
+            onBack={() => navigation.goBack()}
+            onOpenProduct={(slug) => navigation.navigate('ProductDetail', { slug })}
+            onOpenCart={() => navigation.navigate('Cart')}
+          />
+        )}
+      </Stack.Screen>
+
+      <Stack.Screen name="SellProduct">
+        {({ navigation }) => (
+          <SellProductScreen
+            onBack={() => navigation.goBack()}
+            onSubmitted={() => navigation.replace('SellerProducts')}
+          />
+        )}
+      </Stack.Screen>
+
+      <Stack.Screen name="SellerProducts">
+        {({ navigation }) => (
+          <SellerProductsScreen
+            onBack={() => navigation.goBack()}
+            onOpenProduct={(slug) => navigation.navigate('ProductDetail', { slug })}
           />
         )}
       </Stack.Screen>
@@ -305,7 +360,6 @@ export function BuyerNavigator() {
           <CartScreen
             onBack={() => navigation.goBack()}
             onOpenProduct={(slug) => navigation.navigate('ProductDetail', { slug })}
-            onTopUp={() => navigation.navigate('Wallet')}
             // Straight to the library after paying: the cart the buyer came
             // from is now empty, so returning to it would show an empty state
             // as the reward for a purchase.
@@ -331,10 +385,6 @@ export function BuyerNavigator() {
       </Stack.Screen>
 
       {/* ─── Profile flow ────────────────────────────────────────────────── */}
-      <Stack.Screen name="Wallet">
-        {({ navigation }) => <WalletScreen onBack={() => navigation.goBack()} />}
-      </Stack.Screen>
-
       <Stack.Screen name="Wishlist">
         {({ navigation }) => (
           <WishlistScreen
@@ -365,6 +415,21 @@ export function BuyerNavigator() {
                 kind: 'product',
                 orderItemId: target.order_item_id,
                 subject: target.product_title,
+              })
+            }
+            onEditReview={(review) =>
+              navigation.navigate('WriteReview', {
+                kind: 'edit',
+                review,
+                subject: review.photographer_name,
+                detail: review.service_name,
+              })
+            }
+            onEditProductReview={(review) =>
+              navigation.navigate('WriteReview', {
+                kind: 'editProduct',
+                review,
+                subject: review.product_title,
               })
             }
           />
@@ -452,6 +517,10 @@ export function BuyerNavigator() {
             }
           />
         )}
+      </Stack.Screen>
+
+      <Stack.Screen name="EditProfile">
+        {({ navigation }) => <EditProfileScreen onBack={() => navigation.goBack()} />}
       </Stack.Screen>
     </Stack.Navigator>
   );

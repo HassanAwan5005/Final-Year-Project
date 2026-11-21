@@ -6,6 +6,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -16,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ApiError } from '../../../api/client';
 import { ErrorState, LoadingState } from '../../../components/feedback/States';
 import { Avatar } from '../../../components/ui/Avatar';
+import { useAuthStore } from '../../../store/authStore';
 import { colors, radius, spacing, typography } from '../../../theme';
 import { formatDate, timeAgo } from '../../../utils/format';
 import type { Message } from '../../../types/models';
@@ -24,6 +26,7 @@ import {
   useConversation,
   useDeleteMessage,
   useReportMessage,
+  useSmartReplies,
   useStartConversation,
   useToggleBlock,
 } from '../hooks/useChat';
@@ -116,11 +119,13 @@ function ChatThread({
   onBack: () => void;
   onOpenBooking?: (bookingId: number) => void;
 }) {
+  const currentUser = useAuthStore((s) => s.user);
   const conversation = useConversation(conversationId);
   const thread = useChatThread(conversationId);
   const removeMessage = useDeleteMessage(conversationId);
   const report = useReportMessage();
   const toggleBlock = useToggleBlock();
+  const smartReplies = useSmartReplies(conversationId);
 
   const [draft, setDraft] = useState('');
   const listRef = useRef<FlatList<Message>>(null);
@@ -214,20 +219,34 @@ function ChatThread({
         <Pressable onPress={onBack} hitSlop={12} accessibilityLabel="Go back">
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </Pressable>
-        <Avatar name={other?.full_name ?? heading} uri={other?.avatar_url} size={36} />
+        <View style={styles.avatarWrap}>
+          <Avatar name={other?.full_name ?? heading} uri={other?.avatar_url} size={36} />
+          {other?.is_online ? <View style={styles.onlineBadge} /> : null}
+        </View>
         <View style={styles.headerBody}>
           <Text style={styles.title} numberOfLines={1}>
             {heading}
           </Text>
-          <Text style={styles.presence} numberOfLines={1}>
-            {!thread.connected
-              ? 'Reconnecting…'
-              : other?.is_online
-                ? 'Online'
-                : other?.last_seen_at
-                  ? `Last seen ${timeAgo(other.last_seen_at)}`
-                  : ''}
-          </Text>
+          <View style={styles.presenceRow}>
+            {other?.is_online && thread.connected ? (
+              <View style={styles.onlineDot} />
+            ) : null}
+            <Text
+              style={[
+                styles.presence,
+                other?.is_online && thread.connected && styles.presenceOnline,
+              ]}
+              numberOfLines={1}
+            >
+              {!thread.connected
+                ? 'Reconnecting…'
+                : other?.is_online
+                  ? 'Online'
+                  : other?.last_seen_at
+                    ? `Last seen ${timeAgo(other.last_seen_at)}`
+                    : 'Offline'}
+            </Text>
+          </View>
         </View>
         <Pressable onPress={threadOptions} hitSlop={10} accessibilityLabel="Options">
           <Ionicons name="ellipsis-vertical" size={18} color={colors.sub} />
@@ -262,6 +281,18 @@ function ChatThread({
         </View>
       ) : null}
 
+      <View style={styles.encryptionNotice}>
+        <View style={styles.encryptionPill}>
+          <Ionicons
+            name="lock-closed"
+            size={10}
+            color={colors.gold}
+            style={styles.encryptionIcon}
+          />
+          <Text style={styles.encryptionText}>End-to-End Encrypted</Text>
+        </View>
+      </View>
+
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -275,7 +306,11 @@ function ChatThread({
           contentContainerStyle={styles.list}
           keyboardShouldPersistTaps="handled"
           renderItem={({ item }) => (
-            <Bubble message={item} onLongPress={() => messageOptions(item)} />
+            <Bubble
+              message={item}
+              currentUserId={currentUser?.id}
+              onLongPress={() => messageOptions(item)}
+            />
           )}
           ListEmptyComponent={
             <View style={styles.emptyThread}>
@@ -286,6 +321,42 @@ function ChatThread({
             </View>
           }
         />
+
+        {smartReplies.data && smartReplies.data.length > 0 ? (
+          <View style={styles.smartReplyBar}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.smartReplyScroll}
+              keyboardShouldPersistTaps="handled"
+            >
+              {smartReplies.data.map((item, idx) => (
+                <Pressable
+                  key={idx}
+                  style={({ pressed }) => [
+                    styles.smartReplyChip,
+                    pressed && styles.smartReplyChipPressed,
+                  ]}
+                  onPress={() => {
+                    thread.send(item.text);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={item.text}
+                >
+                  <Ionicons
+                    name="sparkles"
+                    size={12}
+                    color={colors.gold}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text style={styles.smartReplyText} numberOfLines={1}>
+                    {item.text}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
 
         <View style={styles.composer}>
           <TextInput
@@ -318,12 +389,16 @@ function ChatThread({
 
 function Bubble({
   message,
+  currentUserId,
   onLongPress,
 }: {
   message: Message;
+  currentUserId?: number;
   onLongPress: () => void;
 }) {
-  const mine = message.is_mine;
+  const mine = Boolean(
+    message.is_mine || (currentUserId && message.sender === currentUserId),
+  );
 
   if (message.message_type === 'SYSTEM') {
     return <Text style={styles.system}>{message.body}</Text>;
@@ -388,9 +463,38 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
+  avatarWrap: {
+    position: 'relative',
+  },
+  onlineBadge: {
+    position: 'absolute',
+    right: -1,
+    bottom: -1,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.green,
+    borderWidth: 2,
+    borderColor: colors.bg,
+  },
   headerBody: { flex: 1 },
   title: { ...typography.h3, color: colors.text },
+  presenceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  onlineDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.green,
+  },
   presence: { ...typography.tiny, color: colors.sub },
+  presenceOnline: {
+    color: colors.green,
+    fontWeight: '600',
+  },
   bookingBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -410,21 +514,36 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'flex-end',
   },
-  bubbleRow: { flexDirection: 'row', marginBottom: spacing.sm },
-  bubbleRowMine: { justifyContent: 'flex-end' },
-  bubbleRowTheirs: { justifyContent: 'flex-start' },
+  bubbleRow: {
+    width: '100%',
+    flexDirection: 'row',
+    marginBottom: spacing.sm,
+  },
+  bubbleRowMine: {
+    justifyContent: 'flex-end',
+    alignSelf: 'flex-end',
+  },
+  bubbleRowTheirs: {
+    justifyContent: 'flex-start',
+    alignSelf: 'flex-start',
+  },
   bubble: {
     maxWidth: '82%',
     borderRadius: radius.lg,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
-  bubbleMine: { backgroundColor: colors.goldDim, borderBottomRightRadius: radius.sm },
+  bubbleMine: {
+    backgroundColor: colors.goldDim,
+    borderBottomRightRadius: radius.sm,
+    alignSelf: 'flex-end',
+  },
   bubbleTheirs: {
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.border,
     borderBottomLeftRadius: radius.sm,
+    alignSelf: 'flex-start',
   },
   bubbleText: { ...typography.body, color: colors.text, lineHeight: 20 },
   bubbleDeleted: { color: colors.dim, fontStyle: 'italic' },
@@ -453,6 +572,37 @@ const styles = StyleSheet.create({
     color: colors.sub,
     marginTop: spacing.xs,
     textAlign: 'center',
+  },
+  encryptionNotice: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.sm,
+    backgroundColor: 'transparent',
+  },
+  encryptionPill: {
+    // Pin this English label to LTR so an RTL device locale cannot flip the
+    // lock icon to the wrong side or mirror the row.
+    direction: 'ltr',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  encryptionIcon: {
+    marginRight: 6,
+  },
+  encryptionText: {
+    ...typography.tiny,
+    color: colors.dim,
+    fontSize: 11,
+    fontWeight: '500',
+    textAlign: 'left',
+    writingDirection: 'ltr',
   },
   composer: {
     flexDirection: 'row',
@@ -486,4 +636,34 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   sendButtonOff: { backgroundColor: colors.card },
+  smartReplyBar: {
+    paddingVertical: spacing.xs,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  smartReplyScroll: {
+    paddingHorizontal: spacing.md,
+    gap: spacing.sm,
+  },
+  smartReplyChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 7,
+    maxWidth: 320,
+  },
+  smartReplyChipPressed: {
+    backgroundColor: colors.border,
+    opacity: 0.85,
+  },
+  smartReplyText: {
+    ...typography.caption,
+    color: colors.text,
+    fontSize: 12,
+  },
 });

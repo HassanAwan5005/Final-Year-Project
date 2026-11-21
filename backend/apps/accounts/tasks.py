@@ -30,7 +30,7 @@ def send_verification_email(self, user_id: int, email: str, name: str, code: str
         logger.info("Verification email sent", extra={"user_id": user_id})
     except Exception as exc:  # noqa: BLE001
         logger.warning("Verification email failed: %s", exc, extra={"user_id": user_id})
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -52,7 +52,8 @@ def send_password_reset_email(self, user_id: int, email: str, name: str, code: s
         )
         logger.info("Password reset email sent", extra={"user_id": user_id})
     except Exception as exc:  # noqa: BLE001
-        raise self.retry(exc=exc)
+        logger.warning("Password reset email failed: %s", exc, extra={"user_id": user_id})
+        raise self.retry(exc=exc) from exc
 
 
 @shared_task

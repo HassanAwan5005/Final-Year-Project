@@ -67,6 +67,7 @@ class PhotographerFilterSet(django_filters.FilterSet):
     # ─── Sorting (whitelisted) ───────────────────────────────────────────────
     ordering = django_filters.OrderingFilter(
         fields=(
+            ("sort_name", "name"),  # alphabetical; annotated in the list view
             ("bayesian_rating", "rating"),
             ("base_price", "price"),
             ("years_experience", "experience"),
@@ -75,6 +76,7 @@ class PhotographerFilterSet(django_filters.FilterSet):
             ("created_at", "newest"),
         ),
         field_labels={
+            "sort_name": "Name (A–Z)",
             "bayesian_rating": "Rating",
             "base_price": "Price",
             "years_experience": "Experience",

@@ -23,6 +23,7 @@ TRAINERS = {
     "sentiment": "ml.pipelines.train_sentiment",
     "ranker": "ml.pipelines.train_ranker",
     "cf": "ml.pipelines.train_cf",
+    "content": "ml.pipelines.train_content",
 }
 
 

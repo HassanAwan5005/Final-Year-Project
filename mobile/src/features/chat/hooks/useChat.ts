@@ -23,7 +23,13 @@ import { tokenStorage } from '../../../api/client';
 import { WS_ROUTES } from '../../../api/config';
 import { qk } from '../../../api/queryKeys';
 import { chatApi, messageClientId } from '../../../api/services/chat.api';
-import type { Message } from '../../../types/models';
+import { useAuthStore } from '../../../store/authStore';
+import type {
+  ChatParticipant,
+  Conversation,
+  ConversationDetail,
+  Message,
+} from '../../../types/models';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // THREAD LIST
@@ -73,6 +79,15 @@ export function useChatContacts(term = '') {
     queryKey: qk.chat.contacts(term),
     queryFn: () => chatApi.contacts(term),
     staleTime: 60_000,
+  });
+}
+
+export function useSmartReplies(conversationId: number | null) {
+  return useQuery({
+    queryKey: ['chat', 'smart-replies', conversationId],
+    queryFn: () => (conversationId ? chatApi.smartReplies(conversationId) : Promise.resolve([])),
+    enabled: Boolean(conversationId),
+    staleTime: 5_000,
   });
 }
 
@@ -194,15 +209,17 @@ export function useChatThread(conversationId: number | null) {
           try {
             const frame = JSON.parse(event.data as string);
             if (frame.type === 'message') {
+              const currentUserId = useAuthStore.getState().user?.id;
+              const isMine = Boolean(
+                frame.is_mine ?? (currentUserId && frame.sender_id === currentUserId),
+              );
               absorb({
                 id: frame.id,
                 conversation: frame.conversation_id,
                 sender: frame.sender_id,
                 sender_name: frame.sender_name ?? '',
                 sender_avatar: null,
-                // The frame comes from the group, so it echoes our own sends
-                // too — hence comparing against the ids we are waiting on.
-                is_mine: false,
+                is_mine: isMine,
                 message_type: frame.message_type ?? 'TEXT',
                 body: frame.body ?? '',
                 client_id: frame.client_id ?? '',
@@ -214,6 +231,21 @@ export function useChatThread(conversationId: number | null) {
                 created_at: frame.created_at,
               });
               queryClient.invalidateQueries({ queryKey: qk.chat.unread });
+            } else if (frame.type === 'presence' && frame.is_online) {
+              // Only trust "online" from the thread socket. Its "offline" frame
+              // fires when the other person merely leaves this screen while
+              // still in the app — real offline comes from usePresenceSocket.
+              queryClient.setQueryData<any>(qk.chat.conversation(conversationId), (old: any) => {
+                if (!old?.other_participant || old.other_participant.id !== frame.user_id) return old;
+                return {
+                  ...old,
+                  other_participant: {
+                    ...old.other_participant,
+                    is_online: Boolean(frame.is_online),
+                    last_seen_at: frame.is_online ? old.other_participant.last_seen_at : new Date().toISOString(),
+                  },
+                };
+              });
             }
           } catch {
             // A malformed frame is not worth breaking the screen over.
@@ -350,4 +382,108 @@ export function useReportMessage() {
     }) => chatApi.report(messageId, reason, detail),
     retry: false,
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRESENCE
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Keeps the backend's 60s presence TTL alive with margin. */
+const PRESENCE_HEARTBEAT_MS = 30_000;
+
+/**
+ * One presence socket for the whole signed-in app.
+ *
+ * The backend reports `is_online` from a Redis key that ONLY /ws/presence/
+ * sets (and expires after 60s without a heartbeat). Without this socket every
+ * user is reported offline. Incoming presence frames are patched straight into
+ * the cached conversation detail and list rows so dots update live.
+ */
+export function usePresenceSocket(enabled: boolean) {
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    let socket: WebSocket | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+
+    const applyPresence = (userId: number, isOnline: boolean) => {
+      const patch = (p: ChatParticipant | null) =>
+        p && p.id === userId
+          ? {
+              ...p,
+              is_online: isOnline,
+              last_seen_at: isOnline ? p.last_seen_at : new Date().toISOString(),
+            }
+          : p;
+
+      queryClient.setQueriesData<ConversationDetail>(
+        { queryKey: ['chat', 'conversation'] },
+        (old) =>
+          old && old.other_participant?.id === userId
+            ? { ...old, other_participant: patch(old.other_participant) }
+            : old,
+      );
+      queryClient.setQueriesData<unknown>(
+        { queryKey: ['chat', 'conversations'] },
+        (old: unknown) => {
+          const patchRow = (row: Conversation) =>
+            row.other_participant?.id === userId
+              ? { ...row, other_participant: patch(row.other_participant) }
+              : row;
+          if (Array.isArray(old)) return old.map(patchRow);
+          const page = old as { results?: Conversation[] } | undefined;
+          if (page && Array.isArray(page.results)) {
+            return { ...page, results: page.results.map(patchRow) };
+          }
+          return old;
+        },
+      );
+    };
+
+    const connect = async () => {
+      const token = await tokenStorage.getAccess();
+      if (!token || cancelled) return;
+
+      try {
+        socket = new WebSocket(WS_ROUTES.presence(token));
+        socket.onopen = () => {
+          if (heartbeat) clearInterval(heartbeat);
+          heartbeat = setInterval(() => {
+            if (socket?.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ type: 'heartbeat' }));
+            }
+          }, PRESENCE_HEARTBEAT_MS);
+        };
+        socket.onmessage = (event) => {
+          try {
+            const frame = JSON.parse(event.data as string);
+            if (frame.type === 'presence' && typeof frame.user_id === 'number') {
+              applyPresence(frame.user_id, Boolean(frame.is_online));
+            }
+          } catch {
+            // Ignore malformed frames.
+          }
+        };
+        socket.onclose = () => {
+          if (heartbeat) clearInterval(heartbeat);
+          if (!cancelled) retry = setTimeout(connect, 15_000);
+        };
+        socket.onerror = () => socket?.close();
+      } catch {
+        // Presence is cosmetic; never surface a socket failure to the user.
+      }
+    };
+
+    connect();
+    return () => {
+      cancelled = true;
+      if (retry) clearTimeout(retry);
+      if (heartbeat) clearInterval(heartbeat);
+      socket?.close();
+      socket = null;
+    };
+  }, [enabled, queryClient]);
 }

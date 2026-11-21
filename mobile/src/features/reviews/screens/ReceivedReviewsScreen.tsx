@@ -131,7 +131,7 @@ export function ReceivedReviewsScreen({ onBack }: { onBack: () => void }) {
           refreshControl={
             <RefreshControl
               refreshing={reviews.isRefetching}
-              onRefresh={() => reviews.refetch()}
+              onRefresh={() => { void reviews.refetch(); }}
               tintColor={colors.gold}
             />
           }

@@ -15,6 +15,7 @@ without losing the in-app record.
 
 from django.db import models
 
+from apps.accounts.models import DevicePlatform
 from apps.core.models import TimeStampedModel
 
 
@@ -167,7 +168,7 @@ class PushToken(TimeStampedModel):
     )
     token = models.CharField(max_length=512, db_index=True)
     platform = models.CharField(
-        max_length=16, choices=[("IOS", "iOS"), ("ANDROID", "Android"), ("WEB", "Web")]
+        max_length=16, choices=DevicePlatform.choices
     )
     device_id = models.CharField(max_length=255, blank=True)
     is_active = models.BooleanField(default=True)

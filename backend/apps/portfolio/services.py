@@ -58,6 +58,24 @@ def upload_image(
         width, height = probe.size
     image.seek(0)
 
+    from apps.portfolio.ai import analyze_image_aesthetic, extract_image_embedding
+
+    cat_slug = (category.slug if category else (album.category.slug if (album and album.category) else ""))
+    visual_style, shot_type, aesthetic_score = analyze_image_aesthetic(
+        image,
+        caption=caption,
+        width=width,
+        height=height,
+        category_slug=cat_slug,
+    )
+    embedding = extract_image_embedding(
+        image,
+        caption=caption,
+        width=width,
+        height=height,
+        category_slug=cat_slug,
+    )
+
     row = PortfolioImage(
         photographer=photographer,
         album=album,
@@ -68,6 +86,10 @@ def upload_image(
         height=height,
         file_size_kb=int(getattr(image, "size", 0) / 1024),
         is_featured=is_featured and _featured_slots_left(photographer) > 0,
+        visual_style=visual_style,
+        shot_type=shot_type,
+        aesthetic_score=aesthetic_score,
+        embedding=embedding,
     )
 
     # Three renditions from one upload. Each call re-opens the source, so the
@@ -244,22 +266,40 @@ def _refresh_portfolio_score(photographer) -> None:
     """
     `portfolio_score` is a ranking feature (0-999).
 
-    Composed from volume and engagement rather than stored raw, so a
-    photographer with 3 stunning images is not permanently outranked by one
-    who uploaded 200 snapshots — the like count carries more weight per item.
+    Enhanced with Aesthetic Scoring and Visual Diversity:
+    Composed from volume, engagement, aesthetic clarity, and diversity of
+    shot types / visual styles across the creator's portfolio.
     """
-    from django.db.models import Sum
+    from django.db.models import Avg, Sum
 
-    agg = PortfolioImage.objects.filter(
+    images_qs = PortfolioImage.objects.filter(
         photographer=photographer, is_deleted=False
-    ).aggregate(total=Sum("like_count"), views=Sum("view_count"))
+    )
+    agg = images_qs.aggregate(
+        total_likes=Sum("like_count"),
+        total_views=Sum("view_count"),
+        avg_aesthetic=Avg("aesthetic_score"),
+    )
 
-    count = PortfolioImage.objects.filter(
-        photographer=photographer, is_deleted=False
-    ).count()
+    count = images_qs.count()
+    distinct_styles = (
+        images_qs.exclude(visual_style="").values("visual_style").distinct().count()
+    )
+    distinct_shots = (
+        images_qs.exclude(shot_type="").values("shot_type").distinct().count()
+    )
 
-    score = min(999, count * 3 + (agg["total"] or 0) * 5 + (agg["views"] or 0) // 10)
-    photographer.portfolio_score = score
+    # Diversity bonus: 15 points per distinct visual style (6) and shot type (5),
+    # so at most 165 for a portfolio that covers every perspective.
+    diversity_bonus = (distinct_styles * 15) + (distinct_shots * 15)
+    # Quality only counts once there is something to judge — an empty
+    # portfolio must not outrank a real one on a default score.
+    aesthetic_component = int(float(agg["avg_aesthetic"]) * 100) if count else 0
+
+    base_score = count * 3 + (agg["total_likes"] or 0) * 5 + (agg["total_views"] or 0) // 10
+    total_score = min(999, base_score + diversity_bonus + aesthetic_component)
+
+    photographer.portfolio_score = total_score
     photographer.save(update_fields=["portfolio_score", "updated_at"])
 
 

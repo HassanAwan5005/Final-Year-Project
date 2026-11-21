@@ -3,9 +3,11 @@ import React, { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { setSessionExpiredHandler } from '../api/client';
+import { usePresenceSocket } from '../features/chat/hooks/useChat';
 import { useNotificationSocket } from '../features/notifications/hooks/useNotifications';
 import { useAuthStore } from '../store/authStore';
 import { colors, spacing, typography } from '../theme';
+import { AdminNavigator } from './AdminNavigator';
 import { AuthNavigator } from './AuthNavigator';
 import { BuyerNavigator } from './BuyerNavigator';
 import { PhotographerNavigator } from './PhotographerNavigator';
@@ -42,6 +44,8 @@ export function RootNavigator() {
    * unauthenticated and degrades silently — the badge still polls.
    */
   useNotificationSocket(isAuthenticated && Boolean(user));
+  // Same idea for presence: keeps this user "online" for everyone else.
+  usePresenceSocket(isAuthenticated && Boolean(user));
 
   useEffect(() => {
     // Wire the axios interceptor's "refresh failed" callback into the store,
@@ -70,6 +74,8 @@ export function RootNavigator() {
       */}
       {!isAuthenticated || !user ? (
         <AuthNavigator />
+      ) : user.role === 'ADMIN' ? (
+        <AdminNavigator />
       ) : user.role === 'PHOTOGRAPHER' ? (
         <PhotographerNavigator />
       ) : (

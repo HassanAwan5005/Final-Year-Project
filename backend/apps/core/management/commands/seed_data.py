@@ -17,13 +17,12 @@ data quality problems live.
 
 import csv
 import random
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
-from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 from django.utils.text import slugify
@@ -98,9 +97,21 @@ class Command(BaseCommand):
                  "back each photographer's headline rating (much faster, but "
                  "profiles will show a rating with no reviews behind it).",
         )
+        parser.add_argument(
+            "--only-engagement", action="store_true",
+            dest="only_engagement",
+            help="Only add the engagement history (daily views, clicks, portfolio "
+                 "interactions, inquiries) to an already-seeded database. "
+                 "Non-destructive: inserts analytics rows, changes nothing else.",
+        )
 
     def handle(self, *args, **options):
         self.stdout.write(self.style.MIGRATE_HEADING("\nSnapSphere data seeder"))
+
+        if options["only_engagement"]:
+            self._seed_engagement_history()
+            return
+
         self.stdout.write(f"Reading datasets from {RAW}\n")
 
         if options["flush"]:
@@ -126,6 +137,7 @@ class Command(BaseCommand):
         self._seed_wallets()
         if not options["skip_analytics"]:
             self._seed_analytics()
+            self._seed_engagement_history()
         self._refresh_metrics()
 
         self._summary()
@@ -370,7 +382,7 @@ class Command(BaseCommand):
             profile.is_approved = random.random() < 0.85
             profile.approved_at = timezone.now() if profile.is_approved else None
             profile.approved_by = self.admin if profile.is_approved else None
-            profile.is_verified = rating >= Decimal("4.5") and reviews > 150
+            profile.is_verified = False  # no photographer is seeded with the blue tick
             profile.is_featured = rating >= Decimal("4.7") and reviews > 300
             profile.save()
 
@@ -531,7 +543,8 @@ class Command(BaseCommand):
                 datetime.strptime(row["Timestamp"], "%Y-%m-%d")
             )
 
-            def add(kind):
+            def add(kind, buyer=buyer, photographer=photographer, row=row,
+                    category=category, ts=ts):
                 objects.append(
                     BuyerInteraction(
                         buyer=buyer, photographer=photographer,
@@ -935,18 +948,18 @@ class Command(BaseCommand):
         self._ok("reviews", made, extra="photography prose, tone-matched to rating")
 
     def _seed_products(self):
-        """Digital marketplace listings, priced from data.csv-like ranges."""
+        """Camera & mobile gear listings, priced in realistic PKR ranges."""
         from apps.marketplace.models import DigitalProduct, ProductType
 
         templates = [
-            (ProductType.LIGHTROOM_PRESET, "Warm Desi Wedding Presets", 1500, 4500),
-            (ProductType.LIGHTROOM_PRESET, "Moody Film Preset Pack", 1200, 3800),
-            (ProductType.WEDDING_LUT, "Cinematic Wedding LUT Bundle", 2500, 6500),
-            (ProductType.PHOTOSHOP_TEMPLATE, "Editorial Retouch Actions", 1800, 5200),
-            (ProductType.ALBUM_TEMPLATE, "Luxury Album Layout Set", 3000, 8500),
-            (ProductType.VIDEO_EFFECT, "Highlight Reel Transitions", 2200, 6000),
-            (ProductType.STOCK_PHOTO, "Lahore Architecture Stock Pack", 900, 3200),
-            (ProductType.OVERLAY, "Golden Hour Light Overlays", 1100, 3400),
+            (ProductType.CAMERA_ACCESSORY, "Spare Camera Battery & Dual Charger", 4500, 12000),
+            (ProductType.CAMERA_ACCESSORY, "Weather-Sealed Camera Bag", 6000, 18000),
+            (ProductType.MOBILE_ACCESSORY, "Clip-On Phone Lens Kit", 2500, 7500),
+            (ProductType.MOBILE_ACCESSORY, "Phone Rig with Cold Shoe", 3500, 9000),
+            (ProductType.LENS, "50mm f/1.8 Portrait Lens", 35000, 65000),
+            (ProductType.LIGHTING_AUDIO, "Bi-Colour LED Video Light", 8000, 22000),
+            (ProductType.LIGHTING_AUDIO, "Wireless Lavalier Mic Pair", 9000, 25000),
+            (ProductType.TRIPOD_GIMBAL, "3-Axis Smartphone Gimbal", 15000, 38000),
         ]
         sellers = [p for p in self.photographers.values() if p.is_approved][:60]
         made = 0
@@ -954,14 +967,14 @@ class Command(BaseCommand):
             for ptype, name, lo, hi in random.sample(templates, random.randint(1, 3)):
                 price = Decimal(str(random.randrange(lo, hi, 100)))
                 DigitalProduct.objects.create(
-                    seller=seller,
+                    seller=seller.user,
                     category=seller.categories.first(),
                     title=f"{name} — {seller.user.first_name_only} Edition",
                     description=(
-                        f"A professionally crafted {ptype.label.lower()} set built "
-                        f"from {seller.years_experience} years of real client work. "
-                        f"Drag-and-drop ready, tested on Pakistani skin tones and "
-                        f"South Asian wedding lighting."
+                        f"{name}, picked and field-tested by a photographer with "
+                        f"{seller.years_experience} years of real client work. "
+                        f"Ready for long wedding days and outdoor shoots in "
+                        f"Pakistani conditions."
                     ),
                     product_type=ptype,
                     price=price,
@@ -973,7 +986,11 @@ class Command(BaseCommand):
                     view_count=random.randint(50, 4000),
                     file_count=random.randint(1, 40),
                     total_size_mb=Decimal(str(round(random.uniform(2, 480), 2))),
-                    compatible_with=["Lightroom Classic 12+", "Lightroom Mobile"],
+                    compatible_with=(
+                        ["Android", "iPhone"]
+                        if ptype == ProductType.MOBILE_ACCESSORY
+                        else ["Canon", "Nikon", "Sony"]
+                    ),
                     tags=[ptype.label, seller.categories.first().name],
                 )
                 made += 1
@@ -1273,6 +1290,116 @@ class Command(BaseCommand):
             rows_out, batch_size=500, ignore_conflicts=True
         )
         self._ok("daily analytics rows", len(rows_out), extra=f"from {len(files)} CSVs")
+
+    def _seed_engagement_history(self):
+        """
+        Engagement that LEADS to the bookings already in the database.
+
+        WHY THIS EXISTS
+        ---------------
+        The service_*.csv engagement rows cover only 2023, about one day per
+        photographer per quarter, and their numbers are random with respect to
+        bookings. A ranker trained to predict bookings from engagement can
+        learn nothing from them, so the proposal's "ranking based on
+        engagement and reviews" had no data behind it.
+
+        This step generates the funnel a real marketplace records:
+
+          · every booking is preceded, 7-45 days earlier, by profile views,
+            card clicks and portfolio interactions, and often by an inquiry
+          · how deeply buyers explore the portfolio, and how often they send
+            an inquiry, rise with the photographer's review rating and
+            portfolio quality
+          · background browsing that leads to no booking is added on top, so
+            engagement is a strong but noisy signal, never a copy of bookings
+
+        Existing (photographer, date) rows — the CSV data — are kept as they
+        are; generated rows only fill the days that are empty.
+        """
+        from collections import defaultdict
+
+        from apps.analytics.models import DailyPhotographerStat
+        from apps.bookings.constants import BookingStatus
+        from apps.bookings.models import Booking
+        from apps.profiles.models import PhotographerProfile
+
+        rng = random.Random(20261120)
+        profiles = {
+            p.pk: p for p in PhotographerProfile.objects.filter(is_deleted=False)
+        }
+        if not profiles:
+            self._ok("engagement history rows", 0, extra="no photographers")
+            return
+
+        today = timezone.localdate()
+        day_stats = defaultdict(lambda: [0, 0, 0, 0])  # views, clicks, portfolio, inquiries
+
+        def quality(profile) -> tuple[float, float]:
+            rating = float(profile.bayesian_rating or profile.avg_rating or 4.0)
+            portfolio = float(profile.portfolio_score or 0) / 999.0
+            depth = min(max(0.15 + 0.15 * (rating - 3.5) + 0.25 * portfolio, 0.05), 0.85)
+            inquiry_rate = min(max(0.35 + 0.15 * (rating - 3.5), 0.10), 0.80)
+            return depth, inquiry_rate
+
+        traits = {pid: quality(p) for pid, p in profiles.items()}
+
+        bookings = Booking.objects.filter(photographer_id__in=list(profiles)).exclude(
+            status__in=[BookingStatus.CANCELLED, BookingStatus.REJECTED, BookingStatus.EXPIRED]
+        ).values_list("photographer_id", "created_at")
+
+        first_day = None
+        for pid, created_at in bookings.iterator(chunk_size=5000):
+            booked_on = timezone.localdate(created_at)
+            depth, inquiry_rate = traits[pid]
+            for _ in range(rng.randint(6, 16)):
+                day = booked_on - timedelta(days=rng.randint(7, 45))
+                if day >= today:
+                    continue
+                stats = day_stats[(pid, day)]
+                stats[0] += 1
+                stats[1] += int(rng.random() < 0.55)
+                stats[2] += int(rng.random() < depth)
+                first_day = day if first_day is None or day < first_day else first_day
+            if rng.random() < inquiry_rate:
+                day = booked_on - timedelta(days=rng.randint(1, 10))
+                if day < today:
+                    day_stats[(pid, day)][3] += 1
+
+        # Browsing that never turns into a booking: a few views most weeks.
+        if first_day is not None:
+            for pid in profiles:
+                depth, _ = traits[pid]
+                week = first_day
+                while week < today:
+                    if rng.random() < 0.6:
+                        day = week + timedelta(days=rng.randint(0, 6))
+                        if day < today:
+                            stats = day_stats[(pid, day)]
+                            views = rng.randint(1, 6)
+                            stats[0] += views
+                            stats[1] += sum(rng.random() < 0.4 for _ in range(views))
+                            stats[2] += sum(rng.random() < depth * 0.5 for _ in range(views))
+                    week += timedelta(days=7)
+
+        existing = set(
+            DailyPhotographerStat.objects.filter(photographer_id__in=list(profiles))
+            .values_list("photographer_id", "date")
+        )
+        rows = [
+            DailyPhotographerStat(
+                photographer_id=pid,
+                date=day,
+                search_visibility=views * rng.randint(3, 6),
+                profile_views=views,
+                clicks=clicks,
+                portfolio_interactions=portfolio,
+                inquiries=inquiries,
+            )
+            for (pid, day), (views, clicks, portfolio, inquiries) in day_stats.items()
+            if (pid, day) not in existing
+        ]
+        DailyPhotographerStat.objects.bulk_create(rows, batch_size=2000, ignore_conflicts=True)
+        self._ok("engagement history rows", len(rows), extra="views/clicks/portfolio/inquiries")
 
     def _refresh_metrics(self):
         """

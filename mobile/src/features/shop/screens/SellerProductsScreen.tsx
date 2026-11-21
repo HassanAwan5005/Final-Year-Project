@@ -19,12 +19,10 @@ import { ProductThumb } from '../components/ProductThumb';
 import { useSellerProducts, useSellerSummary } from '../hooks/useShop';
 
 /**
- * What a photographer sells, and what it earned.
+ * What a seller (buyer or photographer) has listed, and what it earned.
  *
- * Read-only: creating products means uploading files to private storage and
- * passing an admin moderation gate, which is scoped separately. Showing the
- * catalogue and the earnings is still worth doing on its own — a seller with
- * no visibility into their sales has no reason to list anything.
+ * New listings are created from the Shop tab's Sell form; they show here as
+ * "In review" until an admin approves them, then "Live".
  */
 export function SellerProductsScreen({
   onBack,
@@ -83,10 +81,10 @@ export function SellerProductsScreen({
                   />
                 </View>
                 <Text style={styles.summaryNote}>
-                  Earnings are credited to your wallet as each sale completes.
+                  Buyers pay you in cash on delivery.
                 </Text>
               </View>
-            ) : null
+            ) : undefined
           }
           renderItem={({ item }) => (
             <SellerRow product={item} onPress={() => onOpenProduct(item.slug)} />

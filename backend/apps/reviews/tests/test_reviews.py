@@ -155,30 +155,38 @@ def test_editing_the_rating_moves_the_average(completed_booking, buyer, photogra
 # ═══════════════════════════════════════════════════════════════════════════
 # EDIT WINDOW
 # ═══════════════════════════════════════════════════════════════════════════
-def test_edit_is_refused_after_the_window(completed_booking, buyer):
+def test_an_old_review_can_still_be_edited(completed_booking, buyer):
     from datetime import timedelta
 
     review = write(completed_booking, buyer)
-    # Pinned as an INTERVAL, not a date: a fixed timestamp would sit either side
-    # of the window depending on what time the suite runs.
     Review.objects.filter(pk=review.pk).update(
-        created_at=timezone.now() - timedelta(hours=services.EDIT_WINDOW_HOURS + 1)
+        created_at=timezone.now() - timedelta(days=365)
     )
     review.refresh_from_db()
 
-    with pytest.raises(BusinessRuleViolation, match="edited for"):
-        services.update_review(review, rating=1)
+    updated = services.update_review(review, rating=1, comment="Changed my mind.")
+    assert updated.rating == 1
 
 
-def test_edit_is_refused_once_the_photographer_has_replied(
+def test_a_replied_review_can_still_be_edited_and_keeps_the_reply(
     completed_booking, buyer, photographer
 ):
     review = write(completed_booking, buyer, rating=2, comment="Late and unprepared.")
     services.reply_to_review(review, photographer, "We're sorry — here is what happened.")
     review.refresh_from_db()
 
-    with pytest.raises(BusinessRuleViolation, match="public reply"):
-        services.update_review(review, comment="Actually it was fine.")
+    updated = services.update_review(review, comment="Actually it was fine.")
+    assert updated.comment == "Actually it was fine."
+    assert hasattr(updated, "reply")
+
+
+def test_a_hidden_review_cannot_be_edited(completed_booking, buyer):
+    review = write(completed_booking, buyer)
+    Review.objects.filter(pk=review.pk).update(is_hidden=True)
+    review.refresh_from_db()
+
+    with pytest.raises(BusinessRuleViolation, match="hidden"):
+        services.update_review(review, rating=1)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

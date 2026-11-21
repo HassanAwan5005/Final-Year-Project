@@ -83,6 +83,7 @@ export const qk = {
     forProduct: (productId: number | string) =>
       ['reviews', 'product', String(productId)] as const,
     mine: ['reviews', 'mine'] as const,
+    myProducts: ['reviews', 'mine', 'products'] as const,
     pending: ['reviews', 'pending'] as const,
     received: (unansweredOnly: boolean) =>
       ['reviews', 'received', unansweredOnly] as const,
@@ -119,5 +120,10 @@ export const qk = {
     albums: (page: number) => ['portfolio', 'albums', page] as const,
     images: (albumId?: number, page: number = 1) =>
       ['portfolio', 'images', albumId ?? 'all', page] as const,
+  },
+
+  admin: {
+    all: ['admin'] as const,
+    pendingListings: ['admin', 'listings', 'pending'] as const,
   },
 } as const;

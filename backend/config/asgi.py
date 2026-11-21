@@ -6,6 +6,7 @@ WS    →  JWT-authenticated Channels consumers (chat, notifications, presence)
 """
 
 import os
+import threading
 
 from django.core.asgi import get_asgi_application
 
@@ -20,6 +21,17 @@ from channels.security.websocket import AllowedHostsOriginValidator  # noqa: E40
 
 from apps.core.ws_auth import JWTAuthMiddlewareStack  # noqa: E402
 from config.ws_urls import websocket_urlpatterns  # noqa: E402
+
+
+def _warm_recommender():
+    from apps.recommendations import engine
+
+    engine.warm_up()
+
+
+# Off the startup path: the server accepts connections immediately, and the
+# models are usually loaded before the first Home-feed request arrives.
+threading.Thread(target=_warm_recommender, daemon=True).start()
 
 application = ProtocolTypeRouter(
     {

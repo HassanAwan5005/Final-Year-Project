@@ -7,13 +7,18 @@ ARCHITECTURE (see docs/01-system-architecture.md §8)
         ↓
     feature assembly      (pandas frame in FEATURE_ORDER)
         ↓
-    content score         (the trained ranker artifact)
+    quality score         (the trained ranker artifact — how good a photographer is)
+        ↓
+    content score         (TF-IDF similarity to the buyer's taste profile — content.py)
         ↓
     collaborative score   (item-item similarity, if the buyer has history)
         ↓
     business rules        (exploration slots, availability boost)
         ↓
     hybrid blend + reason string + cache
+
+    final = w_content·content + w_collab·collab + w_quality·quality + w_business·business
+    (weights of signals that are unavailable for this buyer are redistributed)
 
 THE SINGLE MOST IMPORTANT PROPERTY OF THIS MODULE
 -------------------------------------------------
@@ -33,25 +38,26 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.cache import cache
+from django.utils import timezone
 
 logger = logging.getLogger("snapsphere")
 
-# Must match ml/pipelines/features.py FEATURE_ORDER exactly. A mismatch here
-# scores garbage silently, so it is asserted at load time in _load_ranker().
-FEATURE_ORDER = [
-    "bayesian_rating",
-    "reviews_count_log",
-    "years_experience",
-    "success_rate",
-    "response_speed_score",
-    "portfolio_score_norm",
-    "popularity_score",
-    "engagement_rate",
-    "recency_score",
-    "price_percentile",
-    "sentiment_score",
-    "portfolio_image_count",
-]
+from apps.recommendations.ranking_features import FEATURE_ORDER  # noqa: E402
+
+# FEATURE_ORDER must match ml/pipelines/features.py exactly. A mismatch scores
+# garbage silently, so it is asserted at load time in _load_ranker().
+
+#: Added to the final score of photographers in the signed-in buyer's own city
+#: (from their account). Same scale as the ±0.15 budget adjustment: enough to
+#: bring strong local photographers into the feed, not enough to lift a weak
+#: local one over a much better photographer elsewhere.
+CITY_BOOST = 0.10
+
+#: "Browsing city": among the buyer's last RECENT_VIEWS_WINDOW different
+#: photographers viewed, at least RECENT_VIEWS_SAME_CITY in one city puts that
+#: city's photographers at the top of their personalised list.
+RECENT_VIEWS_WINDOW = 4
+RECENT_VIEWS_SAME_CITY = 3
 
 _ranker = None
 _ranker_loaded = False
@@ -101,6 +107,25 @@ def _load_ranker():
     return _ranker
 
 
+def warm_up() -> None:
+    """
+    Load the models and the scientific stack before the first request.
+
+    Otherwise the first Home-feed request after a server start pays ~2-3 s
+    for pandas/numpy imports and joblib loads. Never raises.
+    """
+    try:
+        import pandas  # noqa: F401
+
+        from apps.recommendations import content
+
+        _load_ranker()
+        _load_cf()
+        content.load_model()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Recommender warm-up failed (will load lazily): %s", exc)
+
+
 def _load_cf():
     """Load the collaborative-filtering similarity matrix."""
     global _cf, _cf_loaded
@@ -127,8 +152,11 @@ def _load_cf():
 def reset_artifact_cache() -> None:
     """Force a reload — called after a nightly retrain promotes a new model."""
     global _ranker, _ranker_loaded, _cf, _cf_loaded
+    from apps.recommendations import content
+
     _ranker, _ranker_loaded = None, False
     _cf, _cf_loaded = None, False
+    content.reset_model_cache()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -136,65 +164,29 @@ def reset_artifact_cache() -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 def build_feature_frame(photographers: list):
     """
-    Turn PhotographerProfile rows into the model's input frame.
+    Turn PhotographerProfile rows into the ranker's input frame, as of now.
 
-    Features are computed here from the denormalised columns on the profile
-    rather than read from the PhotographerFeature table, so a stale or unbuilt
-    feature store can never serve wrong scores. The nightly
-    `refresh_photographer_features` task keeps that table in sync for offline
-    training; this path stays live-accurate.
+    Delegates to ranking_features.build_feature_frame — the SAME function the
+    training pipeline calls with a past `as_of`, so the live engine describes
+    a photographer exactly the way the model learned to read one. Features
+    come from the live booking, review and engagement records, so a stale or
+    unbuilt feature store can never serve wrong scores.
     """
-    import pandas as pd
+    from apps.recommendations.ranking_features import build_feature_frame as build
 
-    if not photographers:
-        return pd.DataFrame(columns=FEATURE_ORDER)
-
-    prices = [float(p.base_price or 0) for p in photographers]
-    completed = [float(p.completed_bookings or 0) for p in photographers]
-
-    # Percentile and popularity are relative to the candidate set, matching
-    # how they were computed at training time.
-    sorted_prices = sorted(prices)
-    log_completed = [math.log1p(c) for c in completed]
-    max_log = max(log_completed) if log_completed else 0.0
-    min_log = min(log_completed) if log_completed else 0.0
-    log_span = (max_log - min_log) or 1.0
-
-    rows = []
-    for p, price, log_c in zip(photographers, prices, log_completed):
-        response_hours = float(p.avg_response_time_hours or 24)
-        rank = sorted_prices.index(price) if sorted_prices else 0
-        rows.append(
-            {
-                "bayesian_rating": float(p.bayesian_rating or 0),
-                "reviews_count_log": math.log1p(float(p.reviews_count or 0)),
-                "years_experience": float(p.years_experience or 0),
-                "success_rate": float(p.success_rate or 0),
-                # INVERTED: low response time is good. See features.py.
-                "response_speed_score": 1.0 / (1.0 + response_hours),
-                "portfolio_score_norm": float(p.portfolio_score or 0) / 999.0,
-                "popularity_score": (log_c - min_log) / log_span,
-                "engagement_rate": min(
-                    float(p.profile_views or 0) / 1000.0, 1.0
-                ),
-                "recency_score": float(p.success_rate or 0),
-                "price_percentile": rank / max(len(sorted_prices) - 1, 1),
-                "sentiment_score": max(
-                    min((float(p.avg_rating or 0) - 1.0) / 4.0, 1.0), 0.0
-                ),
-                "portfolio_image_count": min(
-                    float(p.portfolio_score or 0) / 40.0, 60.0
-                ),
-            }
-        )
-    return pd.DataFrame(rows, columns=FEATURE_ORDER)
+    return build(photographers)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SCORING
 # ═══════════════════════════════════════════════════════════════════════════
-def _content_scores(photographers: list) -> list[float]:
-    """Score with the trained ranker, or fall back to a rating proxy."""
+def _quality_scores(photographers: list) -> list[float]:
+    """
+    How good each photographer is, from the trained ranker (or a rating proxy).
+
+    The same for every buyer. The buyer-specific signals are the content
+    score (content.content_similarity_scores) and the collaborative score.
+    """
     ranker = _load_ranker()
     if ranker is None:
         return [float(p.avg_rating or 0) / 5.0 for p in photographers]
@@ -261,6 +253,89 @@ def _collab_scores(buyer_id: int | None, photographers: list) -> list[float]:
         return zeros
 
 
+
+def _get_buyer_budget_preference(buyer_id: int | None) -> tuple[float, float] | None:
+    """
+    Learn the buyer's spending comfort zone based on their interactions, cart additions,
+    clicked services/products, and past bookings.
+
+    Returns (target_price, tolerance) in PKR, or None if insufficient signal.
+    """
+    if not buyer_id:
+        return None
+
+    try:
+        from apps.bookings.models import Booking
+        from apps.marketplace.models import CartItem
+        from apps.recommendations.models import BuyerInteraction
+
+        prices = []
+
+        # 1. Past bookings (highest intent signal: actual money spent or committed)
+        booking_prices = list(
+            Booking.objects.filter(buyer_id=buyer_id)
+            .exclude(total_price=0)
+            .values_list("total_price", flat=True)[:15]
+        )
+        for p in booking_prices:
+            prices.append(float(p))
+
+        # 2. Cart items (strong current purchase intent)
+        cart_prices = list(
+            CartItem.objects.filter(user_id=buyer_id)
+            .values_list("product__price", flat=True)[:10]
+        )
+        for p in cart_prices:
+            if p:
+                prices.append(float(p))
+
+        # 3. Interacted photographers' base prices
+        interacted_prices = list(
+            BuyerInteraction.objects.filter(buyer_id=buyer_id)
+            .select_related("photographer")
+            .values_list("photographer__base_price", flat=True)[:25]
+        )
+        for p in interacted_prices:
+            if p and float(p) > 0:
+                prices.append(float(p))
+
+        if not prices:
+            return None
+
+        # Median / mean estimation for spending comfort zone
+        prices.sort()
+        mid = len(prices) // 2
+        median_price = (
+            prices[mid]
+            if len(prices) % 2 != 0
+            else (prices[mid - 1] + prices[mid]) / 2.0
+        )
+
+        if median_price <= 0:
+            return None
+
+        # Tolerance band: +/- 45% of median price (min tolerance 10,000 PKR)
+        tolerance = max(median_price * 0.45, 10000.0)
+        return (median_price, tolerance)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not compute buyer budget preference: %s", exc)
+        return None
+
+
+def _budget_fit_score(base_price: float, budget_pref: tuple[float, float] | None) -> float:
+    """
+    Gaussian-style affinity curve centered on the buyer's budget comfort zone.
+    Returns a score multiplier from 0.0 to 1.0 (1.0 = exact budget match).
+    """
+    if budget_pref is None or base_price <= 0:
+        return 0.5  # Neutral when no budget history is known
+
+    target, tolerance = budget_pref
+    diff = abs(base_price - target)
+    # Bell-curve decay: high affinity within tolerance, decays naturally for luxury outliers
+    return math.exp(-0.5 * (diff / tolerance) ** 2)
+
+
 def _business_score(photographer) -> float:
     """
     Hand-tuned adjustments the models cannot express.
@@ -282,7 +357,16 @@ def _business_score(photographer) -> float:
     return max(min(score, 1.0), 0.0)
 
 
-def _reason(photographer, content: float, collab: float, strategy: str) -> str:
+def _reason(
+    photographer,
+    content: float,
+    collab: float,
+    strategy: str,
+    budget_fit_score: float | None = None,
+    in_buyer_city: bool = False,
+    view_city: str = "",
+    content_sim: float = 0.0,
+) -> str:
     """
     A human-readable justification.
 
@@ -293,11 +377,22 @@ def _reason(photographer, content: float, collab: float, strategy: str) -> str:
     """
     parts = []
 
+    # Which personal signal put this photographer here comes FIRST, so it is
+    # never cut by the four-part limit below.
+    if strategy == "CONTENT" and content_sim >= 0.5:
+        parts.append("Similar to photographers you liked")
+    elif strategy == "COLLABORATIVE" and collab > 0.5:
+        parts.append("Buyers like you also booked")
+
     if photographer.avg_rating and photographer.reviews_count:
         parts.append(
             f"{float(photographer.avg_rating):.1f}★ from "
             f"{photographer.reviews_count} reviews"
         )
+    if view_city:
+        parts.append(f"in {view_city}, like your recent views")
+    elif in_buyer_city:
+        parts.append("based in your city")
     if photographer.is_verified:
         parts.append("verified")
 
@@ -311,8 +406,8 @@ def _reason(photographer, content: float, collab: float, strategy: str) -> str:
     elif hours <= 6:
         parts.append(f"replies in ~{int(hours)}h")
 
-    if collab > 0.5:
-        parts.append("popular with buyers like you")
+    if budget_fit_score is not None and budget_fit_score >= 0.82:
+        parts.append("matches your budget")
     if strategy == "EXPLORATION":
         parts.append("new on SnapSphere")
     if photographer.completed_bookings > 40:
@@ -343,7 +438,12 @@ def recommend(
     from apps.profiles import selectors
 
     buyer_id = buyer.pk if buyer and buyer.is_authenticated else None
-    cache_key = _cache_key(buyer_id, category, city, max_price, limit)
+    # The city the buyer has been browsing (see recent_view_city). Worked out
+    # BEFORE the cache lookup and made part of the key, so the moment it
+    # changes the buyer gets a freshly ranked list instead of a 30-minute-old
+    # one. Not used when they filtered by city themselves.
+    view_city = recent_view_city(buyer_id) if buyer_id and not city else ""
+    cache_key = _cache_key(buyer_id, category, city, max_price, limit, view_city)
 
     if use_cache:
         hit = _cache_get(cache_key)
@@ -369,25 +469,69 @@ def recommend(
         return result
 
     # ─── 2-5. Score ──────────────────────────────────────────────────────────
+    from apps.recommendations import content as content_model
+
     ranker = _load_ranker()
-    content = _content_scores(candidates)
+    quality = _quality_scores(candidates)
+    content = content_model.content_similarity_scores(buyer_id, candidates)
     collab = _collab_scores(buyer_id, candidates)
+    has_content = any(c > 0 for c in content)
     has_collab = any(c > 0 for c in collab)
 
-    w_content = settings.REC_WEIGHT_CONTENT
-    w_collab = settings.REC_WEIGHT_COLLAB
-    w_business = settings.REC_WEIGHT_BUSINESS
+    # Redistribute the weight of any signal this buyer has no data for (no
+    # history → no content or collaborative score) across the signals that
+    # remain, rather than letting a block of zeros drag every score down.
+    weights = {
+        "content": settings.REC_WEIGHT_CONTENT if has_content else 0.0,
+        "collab": settings.REC_WEIGHT_COLLAB if has_collab else 0.0,
+        "quality": settings.REC_WEIGHT_QUALITY,
+        "business": settings.REC_WEIGHT_BUSINESS,
+    }
+    total = sum(weights.values()) or 1.0
+    w_content, w_collab, w_quality, w_business = (
+        weights[k] / total for k in ("content", "collab", "quality", "business")
+    )
 
-    if not has_collab:
-        # Redistribute the collaborative weight rather than letting a block of
-        # zeros drag every final score down uniformly.
-        total = w_content + w_business
-        w_content, w_business, w_collab = w_content / total, w_business / total, 0.0
+    budget_pref = _get_buyer_budget_preference(buyer_id)
+
+    # The buyer's own city, from their account. Not applied when the caller
+    # already filtered by city — every candidate is local then anyway — nor
+    # when the buyer's recent views point at a city: what they are browsing
+    # right now outranks where their account says they live.
+    buyer_city = (
+        (getattr(buyer, "city", "") or "").strip().lower()
+        if buyer_id and not city and not view_city
+        else ""
+    )
 
     scored = []
-    for photographer, c_score, cf_score in zip(candidates, content, collab):
+    for photographer, q_score, c_score, cf_score in zip(candidates, quality, content, collab):
         business = _business_score(photographer)
-        final = w_content * c_score + w_collab * cf_score + w_business * business
+        base_price_val = float(photographer.base_price or 0)
+        b_fit = _budget_fit_score(base_price_val, budget_pref) if budget_pref else None
+
+        content_part = w_content * c_score
+        collab_part = w_collab * cf_score
+        raw_final = content_part + collab_part + w_quality * q_score + w_business * business
+
+        # When a buyer's spending zone is known, blend budget fit into the final score
+        # (up to +0.20 boost for exact budget matches, smoothly scaling down for luxury mismatches)
+        if b_fit is not None:
+            budget_boost = (b_fit - 0.5) * 0.30
+            final = max(0.0, min(1.0, raw_final + budget_boost))
+        else:
+            final = raw_final
+
+        # Local photographers first: people book someone they can meet.
+        in_buyer_city = bool(buyer_city) and (
+            (photographer.user.city or "").strip().lower() == buyer_city
+        )
+        if in_buyer_city:
+            final = min(1.0, final + CITY_BOOST)
+
+        in_view_city = bool(view_city) and (
+            (photographer.user.city or "").strip().lower() == view_city
+        )
 
         from django.utils import timezone
 
@@ -395,43 +539,113 @@ def recommend(
             (timezone.now() - photographer.created_at).days <= 30
             and photographer.completed_bookings == 0
         )
+        # Label each photographer by the personal signal that contributed
+        # most to their score — that is what the reason string explains.
         if is_new:
             strategy = "EXPLORATION"
-        elif has_collab and cf_score > c_score:
+        elif collab_part > 0 and collab_part >= content_part:
             strategy = "COLLABORATIVE"
+        elif content_part > 0:
+            strategy = "CONTENT"
         elif ranker is None:
             strategy = "POPULARITY"
         else:
             strategy = "HYBRID"
 
         photographer.score = round(final, 4)
+        photographer.quality_score = round(q_score, 4)
         photographer.content_score = round(c_score, 4)
         photographer.collab_score = round(cf_score, 4)
         photographer.business_score = round(business, 4)
+        photographer.budget_fit_score = round(b_fit, 4) if b_fit is not None else None
         photographer.strategy = strategy
-        photographer.reason = _reason(photographer, c_score, cf_score, strategy)
+        photographer.in_buyer_city = in_buyer_city
+        photographer.in_view_city = in_view_city
+        photographer.reason = _reason(
+            photographer, q_score, cf_score, strategy, budget_fit_score=b_fit,
+            in_buyer_city=in_buyer_city,
+            view_city=photographer.user.city if in_view_city else "",
+            content_sim=c_score,
+        )
         scored.append(photographer)
 
-    # Rank primarily by rating (5 -> 4 -> 3 -> 2 -> 1 -> 0), then reviews count, then model score
-    scored.sort(
-        key=lambda p: (
-            float(p.avg_rating or 0),
-            float(p.reviews_count or 0),
-            p.score,
-        ),
-        reverse=True,
-    )
-    top = scored[:limit]
+    # Viewing several photographers in one city is a clear signal, so it also
+    # makes the list personal ("Picked for you") even before the
+    # collaborative model has enough history.
+    personalised = has_collab or has_content or bool(view_city)
+
+    # The model score decides WHO makes the page; _order_for_display then
+    # decides the ORDER the page is shown in (rating for "Top rated", score
+    # for a personalised "Picked for you").
+    scored.sort(key=lambda p: p.score, reverse=True)
+    # Apply Multi-Armed Bandit (UCB1) for New Talent cold-start promotion
+    if view_city:
+        # Every photographer in the browsing city goes to the top (best score
+        # first), then the rest of the list in score order.
+        ranked = _apply_bandit_exploration(scored, len(scored))
+        top = sorted(ranked, key=lambda p: (not p.in_view_city, -p.score))[:limit]
+    else:
+        top = _apply_bandit_exploration(scored, limit)
+    top = _order_for_display(top, personalised=personalised)
 
     result = {
         "photographers": top,
-        "strategy": "HYBRID" if has_collab else ("CONTENT" if ranker else "POPULARITY"),
-        "personalised": has_collab,
+        "strategy": (
+            "HYBRID" if has_collab and has_content
+            else "COLLABORATIVE" if has_collab
+            else "CONTENT" if has_content
+            else "POPULARITY"
+        ),
+        "personalised": personalised,
         "model_mode": getattr(ranker, "mode", "none") if ranker else "none",
         "relaxed": None,
     }
     _cache_set(cache_key, result)
     return result
+
+
+def recent_view_city(buyer_id) -> str:
+    """
+    The city the buyer is browsing right now, or "" when there is none.
+
+    Looks at the last RECENT_VIEWS_WINDOW DIFFERENT photographers whose
+    profiles they opened (opening the same one five times counts once). If at
+    least RECENT_VIEWS_SAME_CITY of them are in the same city, that city is
+    returned, lower-cased. It follows the buyer: open three or four
+    photographers in another city and that city takes over. One small query on
+    an indexed table; never raises.
+    """
+    if not buyer_id:
+        return ""
+    try:
+        from collections import Counter
+
+        from apps.recommendations.models import BuyerInteraction, BuyerInteractionType
+
+        recent = (
+            BuyerInteraction.objects.filter(
+                buyer_id=buyer_id, interaction_type=BuyerInteractionType.VIEW
+            )
+            .order_by("-created_at")
+            .values_list("photographer_id", "photographer__user__city")[:50]
+        )
+        seen, cities = set(), []
+        for photographer_id, photographer_city in recent:
+            if photographer_id in seen:
+                continue
+            seen.add(photographer_id)
+            cities.append((photographer_city or "").strip().lower())
+            if len(cities) == RECENT_VIEWS_WINDOW:
+                break
+
+        counts = Counter(c for c in cities if c)
+        if not counts:
+            return ""
+        top_city, n = counts.most_common(1)[0]
+        return top_city if n >= RECENT_VIEWS_SAME_CITY else ""
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not read recent viewing city: %s", exc)
+        return ""
 
 
 def _order_for_display(rows: list, *, personalised: bool) -> list:
@@ -478,32 +692,102 @@ def _order_for_display(rows: list, *, personalised: bool) -> list:
     return rows
 
 
-def _apply_exploration_quota(scored: list, limit: int) -> list:
+def _compute_newcomer_bandit_scores(newcomers: list) -> dict[int, float]:
     """
-    Reserve slots for new photographers.
+    Upper Confidence Bound (UCB1) & Thompson-style Multi-Armed Bandit for new creators.
 
-    Pure score ordering is a rich-get-richer loop: established photographers
-    rank high, get booked, rank higher. Holding back a couple of slots is what
-    keeps new supply discoverable — and it is a deliberate, tunable business
-    decision (REC_EXPLORATION_SLOTS), not an accident of the model.
+    Instead of hardcoding fixed slot numbers (which indiscriminately shows all 0-review
+    photographers regardless of whether users engage with them):
+    - Measures each newcomer's view-to-inquiry/booking conversion rate.
+    - Balances exploitation (promotes newcomers who convert well on portfolio views)
+      and exploration (provides an uncertainty bonus sqrt(2 * ln(N) / n) for untried newcomers).
     """
-    quota = settings.REC_EXPLORATION_SLOTS
-    if quota <= 0 or len(scored) <= limit:
+    if not newcomers:
+        return {}
+
+    try:
+        from apps.recommendations.models import BuyerInteraction, BuyerInteractionType
+
+        newcomer_ids = [p.pk for p in newcomers]
+        # High-intent engagement actions: INQUIRY, WISHLIST, BOOKING, COMPLETED
+        conversion_types = {
+            BuyerInteractionType.INQUIRY,
+            BuyerInteractionType.WISHLIST,
+            BuyerInteractionType.BOOKING,
+            BuyerInteractionType.COMPLETED,
+        }
+
+        # Query interactions for these newcomers in one batch query
+        interactions = list(
+            BuyerInteraction.objects.filter(photographer_id__in=newcomer_ids)
+            .values("photographer_id", "interaction_type")
+        )
+
+        views_count: dict[int, int] = {pid: 0 for pid in newcomer_ids}
+        conversions_count: dict[int, int] = {pid: 0 for pid in newcomer_ids}
+
+        for item in interactions:
+            pid = item["photographer_id"]
+            itype = item["interaction_type"]
+            if itype in (BuyerInteractionType.VIEW, BuyerInteractionType.CLICK):
+                views_count[pid] = views_count.get(pid, 0) + 1
+            elif itype in conversion_types:
+                conversions_count[pid] = conversions_count.get(pid, 0) + 1
+
+        total_trials = max(sum(views_count.values()), len(newcomers))
+        bandit_scores = {}
+
+        for p in newcomers:
+            pid = p.pk
+            n = views_count.get(pid, 0)
+            k = conversions_count.get(pid, 0)
+
+            # If untried or minimal impressions, give standard optimistic prior exploration
+            if n <= 1:
+                # Prior mean = 0.5, high exploration bonus
+                bandit_scores[pid] = 0.5 + math.sqrt(2.0 * math.log(total_trials + 1) / (n + 1))
+            else:
+                # Empirical conversion rate (exploitation)
+                conversion_rate = k / float(n)
+                # UCB uncertainty bonus (exploration)
+                exploration_bonus = math.sqrt(2.0 * math.log(total_trials + 1) / float(n))
+                bandit_scores[pid] = conversion_rate + 0.65 * exploration_bonus
+
+        return bandit_scores
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not compute bandit scores for newcomers: %s", exc)
+        return {p.pk: 0.5 for p in newcomers}
+
+
+def _apply_bandit_exploration(scored: list, limit: int) -> list:
+    """
+    Multi-Armed Bandit (UCB1) for New Talent & Cold Start.
+
+    Replaces rigid static slots with dynamic reward-driven promotion:
+    - Identifies EXPLORATION candidates (new photographers with < 30 days & low/0 bookings).
+    - Ranks newcomers by their UCB conversion / uncertainty score.
+    - Seamlessly elevates high-performing newcomers into natural ranking positions.
+    """
+    if len(scored) <= limit:
         return scored[:limit]
 
-    top = scored[:limit]
-    if sum(1 for p in top if p.strategy == "EXPLORATION") >= quota:
-        return top
-
-    newcomers = [
-        p for p in scored[limit:] if p.strategy == "EXPLORATION"
-    ][:quota]
+    newcomers = [p for p in scored if p.strategy == "EXPLORATION"]
     if not newcomers:
-        return top
+        return scored[:limit]
 
-    # Displace from the bottom of the page, never the top three.
-    keep = top[: limit - len(newcomers)]
-    return keep + newcomers
+    bandit_scores = _compute_newcomer_bandit_scores(newcomers)
+
+    # Attach bandit score and re-rank newcomers dynamically
+    for p in newcomers:
+        b_score = bandit_scores.get(p.pk, 0.5)
+        p.bandit_score = round(b_score, 4)
+        # Dynamic bandit score boost applied to model score
+        p.score = round(p.score + min(0.35, b_score * 0.25), 4)
+
+    # Re-sort to let high-performing newcomers naturally compete with established creators
+    scored.sort(key=lambda p: p.score, reverse=True)
+
+    return scored[:limit]
 
 
 def _relaxed_fallback(category, city, max_price, limit) -> dict:
@@ -540,7 +824,8 @@ def _relaxed_fallback(category, city, max_price, limit) -> dict:
         if rows:
             for p in rows:
                 p.score = round(float(p.avg_rating or 0) / 5.0, 4)
-                p.content_score = p.score
+                p.quality_score = p.score
+                p.content_score = 0.0
                 p.collab_score = 0.0
                 p.business_score = _business_score(p)
                 p.strategy = "POPULARITY"
@@ -566,9 +851,10 @@ def _relaxed_fallback(category, city, max_price, limit) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════
 # CACHE
 # ═══════════════════════════════════════════════════════════════════════════
-def _cache_key(buyer_id, category, city, max_price, limit) -> str:
+def _cache_key(buyer_id, category, city, max_price, limit, view_city="") -> str:
     payload = json.dumps(
-        {"b": buyer_id, "c": category, "city": city, "p": max_price, "n": limit},
+        {"b": buyer_id, "c": category, "city": city, "p": max_price, "n": limit,
+         "vc": view_city},
         sort_keys=True,
     )
     digest = hashlib.md5(payload.encode()).hexdigest()[:16]
@@ -577,7 +863,8 @@ def _cache_key(buyer_id, category, city, max_price, limit) -> str:
 
 #: Score attributes attached to each photographer by recommend().
 _SCORE_ATTRS = (
-    "score", "content_score", "collab_score", "business_score", "strategy", "reason",
+    "score", "quality_score", "content_score", "collab_score", "business_score",
+    "strategy", "reason",
 )
 
 

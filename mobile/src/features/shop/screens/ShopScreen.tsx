@@ -17,7 +17,6 @@ import { ApiError } from '../../../api/client';
 import { EmptyState, ErrorState, LoadingState } from '../../../components/feedback/States';
 import { useDebounce } from '../../../hooks/useDebounce';
 import { colors, radius, spacing, typography } from '../../../theme';
-import { formatPKR } from '../../../utils/format';
 import type { DigitalProduct } from '../../../types/models';
 import { ProductCard } from '../components/ProductCard';
 import {
@@ -35,26 +34,21 @@ const SORTS = [
   { value: '-newest', label: 'Newest' },
 ];
 
-/**
- * The Shop grid.
- *
- * The "I can afford it" chip is a server-side filter rather than a client
- * one: filtering locally would only hide products from the page already
- * downloaded, so a buyer with Rs 900 would still scroll past twenty things
- * they cannot buy on page two.
- */
+/** The Shop grid. Every purchase is cash on delivery. */
 export function ShopScreen({
   onOpenProduct,
   onOpenCart,
+  onBack,
 }: {
   onOpenProduct: (slug: string) => void;
   onOpenCart: () => void;
+  /** Shown when the grid is opened from the Shop tab's Buy / Sell page. */
+  onBack?: () => void;
 }) {
   const { width } = useWindowDimensions();
   const [search, setSearch] = useState('');
   const [type, setType] = useState<string | null>(null);
   const [ordering, setOrdering] = useState('-popularity');
-  const [affordableOnly, setAffordableOnly] = useState(false);
 
   const debounced = useDebounce(search, 350);
 
@@ -63,9 +57,8 @@ export function ShopScreen({
       q: debounced || undefined,
       product_type: type ?? undefined,
       ordering,
-      affordable: affordableOnly || undefined,
     }),
-    [debounced, type, ordering, affordableOnly],
+    [debounced, type, ordering],
   );
 
   const products = useProducts(filters);
@@ -83,7 +76,12 @@ export function ShopScreen({
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <View style={styles.header}>
-        <View>
+        {onBack ? (
+          <Pressable onPress={onBack} hitSlop={12} accessibilityLabel="Go back">
+            <Ionicons name="chevron-back" size={24} color={colors.text} />
+          </Pressable>
+        ) : null}
+        <View style={styles.headerText}>
           <Text style={styles.title}>Shop</Text>
           <Text style={styles.subtitle}>Camera Gear, Mobile Accessories & Presets</Text>
         </View>
@@ -144,16 +142,6 @@ export function ShopScreen({
         style={styles.chipsWrap}
         contentContainerStyle={styles.chips}
       >
-        <Chip
-          label={
-            cart.data
-              ? `Under ${formatPKR(cart.data.wallet_balance)}`
-              : 'I can afford'
-          }
-          icon="wallet-outline"
-          active={affordableOnly}
-          onPress={() => setAffordableOnly((value) => !value)}
-        />
         {SORTS.map((sort) => (
           <Chip
             key={sort.value}
@@ -191,11 +179,7 @@ export function ShopScreen({
             <EmptyState
               icon="pricetags-outline"
               title="Nothing matches"
-              detail={
-                affordableOnly
-                  ? 'Nothing in this range for your current balance. Try clearing the wallet filter.'
-                  : 'Try a different search or category.'
-              }
+              detail="Try a different search or category."
             />
           }
           onEndReachedThreshold={0.4}
@@ -207,7 +191,7 @@ export function ShopScreen({
           refreshControl={
             <RefreshControl
               refreshing={products.isRefetching && !products.isFetchingNextPage}
-              onRefresh={() => products.refetch()}
+              onRefresh={() => { void products.refetch(); }}
               tintColor={colors.gold}
             />
           }
@@ -249,9 +233,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: spacing.md,
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.md,
   },
+  headerText: { flex: 1 },
   title: { ...typography.h1, color: colors.text },
   subtitle: { ...typography.caption, color: colors.sub },
   cartButton: {

@@ -215,6 +215,18 @@ class ConversationViewSet(
         )
         return Response({"unread_count": 0})
 
+    @extend_schema(
+        summary="Dynamic contextual smart reply suggestions",
+        description="Generates instant quick-reply chips based on message context and photographer calendar/services to keep avg_response_time_hours near instant.",
+    )
+    @action(detail=True, methods=["get"], url_path="smart-replies")
+    def smart_replies(self, request, pk=None):
+        conversation = self._conversation(pk)
+        from apps.chat import ai
+
+        replies = ai.generate_smart_replies(conversation, request.user)
+        return Response({"data": replies})
+
     # ─── Per-thread settings ─────────────────────────────────────────────────
     @extend_schema(summary="Mute or unmute this thread", request=None)
     @action(detail=True, methods=["post"])

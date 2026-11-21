@@ -23,6 +23,8 @@ from apps.analytics.services import (
 from apps.bookings.services import accept_booking, complete_booking
 from conftest import working_date
 
+DELIVERY = {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "03001234567"}
+
 pytestmark = pytest.mark.django_db
 
 URL = "/api/v1/analytics/me/"
@@ -139,7 +141,7 @@ def test_marketplace_earnings_are_counted(funded_buyer, photographer, product):
     from apps.marketplace.services import add_to_cart, checkout
 
     add_to_cart(funded_buyer, product)
-    order = checkout(funded_buyer)
+    order = checkout(funded_buyer, **DELIVERY)
 
     rollup_day(timezone.localdate())
     row = DailyPhotographerStat.objects.get(

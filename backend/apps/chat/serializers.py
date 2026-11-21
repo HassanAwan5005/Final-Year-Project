@@ -11,6 +11,8 @@ entire chat history.
 
 from rest_framework import serializers
 
+from apps.administration.models import FlagReason
+
 from apps.chat.models import Conversation, Message, MessageAttachment, MessageType
 
 
@@ -254,10 +256,7 @@ class ConversationReadSerializer(serializers.Serializer):
 
 class ReportMessageSerializer(serializers.Serializer):
     reason = serializers.ChoiceField(
-        choices=[
-            "INAPPROPRIATE", "COPYRIGHT", "SPAM", "FAKE",
-            "HARASSMENT", "OFF_PLATFORM", "OTHER",
-        ]
+        choices=FlagReason.choices
     )
     detail = serializers.CharField(max_length=1000, required=False, allow_blank=True)
 

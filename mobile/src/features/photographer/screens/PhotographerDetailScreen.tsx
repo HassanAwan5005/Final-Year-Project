@@ -15,10 +15,11 @@ import { ErrorState, LoadingState } from '../../../components/feedback/States';
 import { Avatar } from '../../../components/ui/Avatar';
 import { Button } from '../../../components/ui/Button';
 import { Stars } from '../../../components/ui/Stars';
-import type { Service } from '../../../types/models';
+import type { PendingBookingReview, Service } from '../../../types/models';
 import { formatPKR, formatRating, timeAgo } from '../../../utils/format';
 import { colors, radius, spacing, typography } from '../../../theme';
 import { usePhotographerDetail } from '../../explore/hooks/usePhotographers';
+import { usePendingReviews } from '../../reviews/hooks/useReviews';
 
 interface Props {
   photographerId: number;
@@ -27,6 +28,8 @@ interface Props {
   /** Module 9 — the full, filterable review list with the distribution. */
   onOpenReviews?: (name: string) => void;
   onMessage?: (userId: number, name: string) => void;
+  /** Buyer-only: open the review form for a completed, un-reviewed booking. */
+  onWriteReview?: (pending: PendingBookingReview) => void;
 }
 
 export function PhotographerDetailScreen({
@@ -35,10 +38,16 @@ export function PhotographerDetailScreen({
   onBook,
   onOpenReviews,
   onMessage,
+  onWriteReview,
 }: Props) {
   const { width } = useWindowDimensions();
   const { data, isLoading, isError, error, refetch } =
     usePhotographerDetail(photographerId);
+  const pendingReviews = usePendingReviews(Boolean(onWriteReview));
+  // A completed booking with this photographer the buyer has not reviewed yet.
+  const reviewable = pendingReviews.data?.bookings.find(
+    (b) => b.photographer_id === photographerId,
+  );
 
   if (isLoading) return <Shell onBack={onBack}><LoadingState /></Shell>;
   if (isError || !data) {
@@ -85,18 +94,78 @@ export function PhotographerDetailScreen({
           <Text style={styles.tagline}>{data.tagline}</Text>
 
           <View style={styles.ratingRow}>
-            <Stars rating={data.avg_rating} count={data.reviews_count} size={15} />
+            <Stars rating={data.avg_rating} size={16} />
+            <Text style={styles.reviewsContextText}>
+              {data.reviews_count > 0
+                ? `${formatRating(data.avg_rating)}★ (${data.reviews_count} verified reviews)`
+                : 'New on SnapSphere'}
+            </Text>
           </View>
 
           <View style={styles.pillRow}>
-            <Pill icon="location-outline" label={data.city} />
-            <Pill icon="briefcase-outline" label={`${data.years_experience}y exp`} />
-            <Pill icon="camera-outline" label={`${data.completed_bookings} shoots`} />
+            {data.city ? <Pill icon="location-outline" label={data.city} /> : null}
+            {data.years_experience > 0 ? (
+              <Pill icon="briefcase-outline" label={`${data.years_experience}+ Years Experience`} />
+            ) : null}
+            {(() => {
+              const yrs = data.years_experience || 0;
+              if (yrs < 1) {
+                return (
+                  <Pill
+                    icon="leaf-outline"
+                    label="🌱 New Talent"
+                    color={colors.green}
+                    borderColor={colors.green}
+                  />
+                );
+              }
+              if (yrs <= 3) {
+                return (
+                  <Pill
+                    icon="trending-up-outline"
+                    label="🌿 Growing Professional"
+                    color={colors.blue}
+                    borderColor={colors.blue}
+                  />
+                );
+              }
+              if (yrs <= 6) {
+                return (
+                  <Pill
+                    icon="ribbon-outline"
+                    label="🎖 Senior Specialist"
+                    color={colors.gold}
+                    borderColor={colors.gold}
+                  />
+                );
+              }
+              return (
+                <Pill
+                  icon="sparkles"
+                  label="👑 Master"
+                  color={colors.amber}
+                  borderColor={colors.amber}
+                />
+              );
+            })()}
+            {data.completed_bookings > 0 ? (
+              <Pill icon="trophy-outline" label={`${data.completed_bookings}+ Shoots Completed`} />
+            ) : null}
+            {parseFloat(data.success_rate || '0') > 0 ? (
+              <Pill
+                icon="shield-checkmark-outline"
+                label={`${Math.round(parseFloat(data.success_rate) * 100)}% Shoot Completion Rate`}
+              />
+            ) : null}
           </View>
 
           <View style={styles.responseRow}>
-            <Ionicons name="flash-outline" size={13} color={colors.green} />
-            <Text style={styles.responseText}>{data.response_time_label}</Text>
+            <Ionicons name="flash" size={13} color={colors.gold} />
+            <Text style={styles.responseText}>
+              {data.response_time_label
+                ? `⚡ ${data.response_time_label}`
+                : '⚡ Replies in <1 hr'}
+            </Text>
           </View>
         </View>
 
@@ -143,6 +212,23 @@ export function PhotographerDetailScreen({
             />
           ))}
         </Section>
+
+        {/* ─── Write a review ──────────────────────────────────────────── */}
+        {onWriteReview && reviewable ? (
+          <Section title="Your feedback">
+            <View style={styles.writeReviewCard}>
+              <Text style={styles.writeReviewText}>
+                How was your {reviewable.service_name}? Rate {data.display_name} and
+                share your experience.
+              </Text>
+              <Button
+                label="Write a review"
+                onPress={() => onWriteReview(reviewable)}
+                icon={<Ionicons name="star" size={16} color={colors.bg} />}
+              />
+            </View>
+          </Section>
+        ) : null}
 
         {/* ─── Ratings breakdown ───────────────────────────────────────── */}
         {totalRatings > 0 ? (
@@ -267,14 +353,18 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Pill({
   icon,
   label,
+  color,
+  borderColor,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
+  color?: string;
+  borderColor?: string;
 }) {
   return (
-    <View style={styles.pill}>
-      <Ionicons name={icon} size={12} color={colors.sub} />
-      <Text style={styles.pillText}>{label}</Text>
+    <View style={[styles.pill, borderColor ? { borderColor, borderWidth: 1 } : null]}>
+      <Ionicons name={icon} size={12} color={color || colors.sub} />
+      <Text style={[styles.pillText, color ? { color, fontWeight: '600' } : null]}>{label}</Text>
     </View>
   );
 }
@@ -328,7 +418,8 @@ const styles = StyleSheet.create({
   identity: { alignItems: 'center', paddingHorizontal: spacing.xl, gap: spacing.sm },
   name: { ...typography.h1, color: colors.text, marginTop: spacing.md },
   tagline: { ...typography.caption, color: colors.sub, textAlign: 'center' },
-  ratingRow: { marginTop: spacing.sm },
+  ratingRow: { marginTop: spacing.sm, alignItems: 'center' },
+  reviewsContextText: { ...typography.tiny, color: colors.sub, marginTop: 4 },
   pillRow: {
     flexDirection: 'row',
     gap: spacing.sm,
@@ -351,8 +442,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 5,
     marginTop: spacing.sm,
+    backgroundColor: colors.card,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
   },
-  responseText: { ...typography.tiny, color: colors.green, fontWeight: '600' },
+  responseText: { ...typography.tiny, color: colors.gold, fontWeight: '700' },
   section: { paddingHorizontal: spacing.xl, marginTop: spacing.xxl },
   sectionTitle: { ...typography.h3, color: colors.text, marginBottom: spacing.md },
   bio: { ...typography.body, color: colors.sub, lineHeight: 22 },
@@ -446,6 +541,15 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   seeAllText: { ...typography.caption, color: colors.gold },
+  writeReviewCard: {
+    gap: spacing.md,
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  writeReviewText: { ...typography.body, color: colors.text },
   bookingBar: {
     flexDirection: 'row',
     alignItems: 'center',

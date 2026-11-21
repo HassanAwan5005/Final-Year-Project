@@ -11,7 +11,7 @@ Follow Part A first — the mobile app is useless without the API running.
 | Backend | Django 5 + DRF + Channels | `http://127.0.0.1:8000` |
 | Database | MySQL 8 | `127.0.0.1:3306` |
 | Cache / queue / websockets | Redis 7 | `127.0.0.1:6379` |
-| Frontend | React Native (Expo SDK 54) | Expo Go on a phone, or an emulator |
+| Frontend | React Native (Expo SDK 58) | Expo Go on a phone, or an emulator |
 
 ---
 
@@ -26,7 +26,7 @@ Install these once. Versions matter — the project is pinned to them.
 | Redis | 7.x | `redis-server --version` |
 | Node.js | 20 LTS or newer | `node --version` |
 | npm | 10+ | `npm --version` |
-| Expo Go app | the **SDK 54** build | on your phone (App Store / Play Store) |
+| Expo Go app | the **SDK 58** build | on your phone (App Store / Play Store) |
 
 ### macOS (Homebrew)
 
@@ -47,14 +47,25 @@ sudo systemctl start mysql redis-server
 
 ### Windows
 
-Use **WSL2 (Ubuntu)** and follow the Ubuntu steps. A native Windows install of
-`mysqlclient` needs the MSVC build tools and is not worth the trouble.
+Native Windows works. Install Python 3.12, MySQL 8 (the MySQL Installer),
+Redis (a Windows build, e.g. as a service), Node.js and **Git for Windows**,
+then run every command below in **Git Bash**. Two differences from the
+commands shown:
+
+* The venv keeps its executables in `.venv/Scripts/` instead of `.venv/bin/`
+  — e.g. `.venv/Scripts/python.exe manage.py migrate`.
+* Create the venv with `py -3.12 -m venv .venv`.
+
+`start.sh`, `stop.sh` and `test.sh` detect Windows themselves. If MySQL is not
+running, `start.sh` starts a local server on the project's `mysql-data/`
+folder; otherwise start your MySQL and Redis Windows services first.
+
+(WSL2 with the Ubuntu steps also works.)
 
 > **Homebrew path note.** On an Intel Mac Homebrew lives in `/usr/local`; on an
 > Apple Silicon Mac it lives in `/opt/homebrew`. Every `/usr/local/opt/...`
 > path below becomes `/opt/homebrew/opt/...` on Apple Silicon. The helper
-> script `start.sh` hard-codes the Intel path in `MYSQL_BIN` — edit that one
-> line if you are on an M-series Mac.
+> scripts find MySQL and Redis by their ports, so they work on either.
 
 ---
 
@@ -138,10 +149,13 @@ next step; the defaults below are what `.env.example` already expects.
 mysql -u root -e "CREATE DATABASE snapsphere CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 mysql -u root -e "CREATE USER 'snapsphere'@'localhost' IDENTIFIED BY 'snapsphere';"
 mysql -u root -e "GRANT ALL PRIVILEGES ON snapsphere.* TO 'snapsphere'@'localhost';"
+mysql -u root -e "GRANT ALL PRIVILEGES ON test_snapsphere.* TO 'snapsphere'@'localhost';"
 mysql -u root -e "FLUSH PRIVILEGES;"
 ```
 
 If your root account has a password, add `-p` and type it when prompted.
+The `test_snapsphere` grant is what lets `pytest` create its own throwaway
+database (Step C3) — without it every test fails with "Access denied".
 
 Verify the user works:
 
@@ -172,6 +186,27 @@ The other defaults work as-is for local development:
 | `BOOKING_MIN_LEAD_HOURS` | `24` | earliest a booking may be made |
 | `PLATFORM_COMMISSION_PERCENT` | `10` | marketplace commission |
 
+### Sending real emails (verification and password-reset codes)
+
+With `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` (the dev
+default) **no email is sent** — every code is printed in the Django server's
+terminal instead. To deliver codes to real inboxes, use a Gmail account with
+2-Step Verification on and an **App Password** (Google Account → Security →
+App passwords), then set in `backend/.env`:
+
+```
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=your-address@gmail.com
+EMAIL_HOST_PASSWORD=your-16-character-app-password
+DEFAULT_FROM_EMAIL=SnapSphere <your-address@gmail.com>
+```
+
+Restart the API afterwards. A failed send is logged as
+"Password reset email failed: …" in the server output.
+
 `.env` is gitignored and must never be committed — only `.env.example` is
 tracked.
 
@@ -197,6 +232,14 @@ Loads the real CSV datasets from `ml/data/raw/` — 200 photographers, 244
 buyers, 600 services, bookings, reviews, 125 marketplace products (including
 the downloadable product files written to `backend/private_media/`), and daily
 analytics rows. Takes a few minutes.
+
+Then give photographers portfolio images — the "Find Similar Style" photo
+search has nothing to match against without them:
+
+```bash
+.venv/bin/python manage.py seed_portfolio                    # generated sample images
+.venv/bin/python manage.py seed_portfolio --from D:/photos   # or your own photos
+```
 
 Faster variants when you just need something to click through:
 
@@ -273,18 +316,18 @@ npm install
 
 ## B2. Understand which SDK version this is
 
-The app is pinned to **Expo SDK 54** (`expo@~54.0.36`, React Native 0.81,
-React 19.1). Expo Go supports exactly one SDK at a time, so the Expo Go build
-on your test device must be the SDK 54 client. Running against a newer Expo Go
-gives:
+The app is on **Expo SDK 58** (`expo@^58.0.0`, React Native 0.88,
+React 19.3). Expo Go supports exactly one SDK at a time, so the Expo Go build
+on your test device must be the SDK 58 client. Running against a different
+Expo Go gives:
 
 ```
 ERROR  Project is incompatible with this version of Expo Go
 ```
 
-**Do not run `npx expo install expo@latest` or `npx expo install --fix`
-against a newer SDK.** See `mobile/AGENTS.md` for the full rationale and the
-SDK-54-specific gotchas already handled in this codebase.
+**Do not change the SDK (`npx expo install expo@<version>`) without first
+confirming the test devices' Expo Go supports it.** See `mobile/AGENTS.md` for
+the SDK-58 notes already handled in this codebase.
 
 ## B3. Point the app at your backend
 
@@ -417,7 +460,7 @@ weighted scorer by design.
 ```bash
 cd mobile
 npx tsc --noEmit
-npx expo install --check     # report package drift against SDK 54
+npx expo install --check     # report package drift against SDK 58
 ```
 
 ---
@@ -434,9 +477,12 @@ npx expo install --check     # report package drift against SDK 54
 | Seed says a table is missing | Migrations were not applied. Run Step A5 before Step A6. |
 | `test.sh` fails at "seed data present" | The database is empty. Run Step A6. |
 | App shows "Network request failed" | The API URL is wrong or Django is bound to `127.0.0.1`. Restart it on `0.0.0.0:8000` and check Step B3. |
-| `Project is incompatible with this version of Expo Go` | Your Expo Go is not the SDK 54 build. Install the SDK 54 client — do not upgrade the project. |
+| `Project is incompatible with this version of Expo Go` | Your Expo Go is not the SDK 58 build. Update Expo Go on the phone — do not change the project's SDK. |
 | Expo QR scan hangs on "Downloading bundle" | Phone and computer are on different networks, or the Wi-Fi isolates clients. Use `npx expo start --tunnel`. |
 | Metro serves stale code after editing `.env` | Restart the bundler: `npx expo start -c` to also clear the cache. |
+| Password-reset / verification code never arrives | Email is on the console backend, so the code is printed in the Django terminal. To send real emails, see "Sending real emails" in Step A4. |
+| Photo search says "No style matches found" | No portfolio images exist yet. Run `manage.py seed_portfolio` (Step A6). |
+| `pytest` fails with `Access denied ... 'test_snapsphere'` | Grant the test database privilege from Step A3. |
 | `.env` changes have no effect on Django | The dev server caches settings at startup. Stop and restart `runserver`. |
 
 ---

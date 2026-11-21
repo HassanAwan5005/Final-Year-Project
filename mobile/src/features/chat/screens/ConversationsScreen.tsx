@@ -146,7 +146,7 @@ export function ConversationsScreen({
           refreshControl={
             <RefreshControl
               refreshing={conversations.isRefetching}
-              onRefresh={() => conversations.refetch()}
+              onRefresh={() => { void conversations.refetch(); }}
               tintColor={colors.gold}
             />
           }

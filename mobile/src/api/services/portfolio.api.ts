@@ -20,7 +20,7 @@ interface PaginatedResponse<T> {
 
 export const portfolioApi = {
   async albums(page = 1): Promise<AlbumPage> {
-    const response = await api.get<any>('/api/v1/portfolio/albums/', {
+    const response = await api.get<any>('/portfolio/albums/', {
       params: { page },
     });
     const data = response.data.data as PaginatedResponse<PortfolioAlbum>;
@@ -36,14 +36,14 @@ export const portfolioApi = {
 
   async albumDetail(albumId: number) {
     return unwrap<PortfolioAlbum>(
-      api.get(`/api/v1/portfolio/albums/${albumId}/`),
+      api.get(`/portfolio/albums/${albumId}/`),
     );
   },
 
   async images(albumId?: number, page = 1) {
     const params: Record<string, any> = { page };
     if (albumId) params.album_id = albumId;
-    const response = await api.get<any>('/api/v1/portfolio/images/', {
+    const response = await api.get<any>('/portfolio/images/', {
       params,
     });
     const data = response.data.data as PaginatedResponse<PortfolioImage>;
@@ -59,7 +59,7 @@ export const portfolioApi = {
 
   async imageDetail(imageId: number) {
     return unwrap<PortfolioImage>(
-      api.get(`/api/v1/portfolio/images/${imageId}/`),
+      api.get(`/portfolio/images/${imageId}/`),
     );
   },
 };

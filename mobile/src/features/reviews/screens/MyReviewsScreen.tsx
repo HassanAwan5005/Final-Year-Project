@@ -17,9 +17,21 @@ import { EmptyState, ErrorState, LoadingState } from '../../../components/feedba
 import { Avatar } from '../../../components/ui/Avatar';
 import { colors, radius, spacing, typography } from '../../../theme';
 import { formatDate } from '../../../utils/format';
-import type { PendingBookingReview, PendingProductReview } from '../../../types/models';
+import type {
+  PendingBookingReview,
+  PendingProductReview,
+  ProductReview,
+  Review,
+} from '../../../types/models';
 import { ReviewCard } from '../components/ReviewCard';
-import { useDeleteReview, useMyReviews, usePendingReviews } from '../hooks/useReviews';
+import { Stars } from '../../../components/ui/Stars';
+import {
+  useDeleteProductReview,
+  useDeleteReview,
+  useMyProductReviews,
+  useMyReviews,
+  usePendingReviews,
+} from '../hooks/useReviews';
 
 /**
  * "Reviews" from the buyer's side: what they owe, then what they have written.
@@ -39,14 +51,38 @@ export function MyReviewsScreen({
   onBack,
   onWriteBookingReview,
   onWriteProductReview,
+  onEditReview,
+  onEditProductReview,
 }: {
   onBack: () => void;
   onWriteBookingReview: (target: PendingBookingReview) => void;
   onWriteProductReview: (target: PendingProductReview) => void;
+  onEditReview?: (review: Review) => void;
+  onEditProductReview?: (review: ProductReview) => void;
 }) {
   const pending = usePendingReviews();
   const mine = useMyReviews();
   const remove = useDeleteReview();
+  const myProducts = useMyProductReviews();
+  const removeProduct = useDeleteProductReview();
+
+  const confirmDeleteProduct = (id: number) =>
+    Alert.alert(
+      'Delete this product review?',
+      'It stops counting towards the product’s rating. You cannot post another for the same purchase.',
+      [
+        { text: 'Keep it', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () =>
+            removeProduct.mutate(id, {
+              onError: (error) =>
+                Alert.alert('Could not delete', (error as ApiError).message),
+            }),
+        },
+      ],
+    );
 
   const confirmDelete = (id: number) =>
     Alert.alert(
@@ -71,8 +107,12 @@ export function MyReviewsScreen({
   const pendingBookings = pending.data?.bookings ?? [];
   const pendingProducts = pending.data?.order_items ?? [];
   const written = mine.data ?? [];
+  const writtenProducts = myProducts.data ?? [];
   const nothingAtAll =
-    !pendingBookings.length && !pendingProducts.length && !written.length;
+    !pendingBookings.length &&
+    !pendingProducts.length &&
+    !written.length &&
+    !writtenProducts.length;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
@@ -102,10 +142,13 @@ export function MyReviewsScreen({
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
-              refreshing={pending.isRefetching || mine.isRefetching}
+              refreshing={
+                pending.isRefetching || mine.isRefetching || myProducts.isRefetching
+              }
               onRefresh={() => {
                 pending.refetch();
                 mine.refetch();
+                myProducts.refetch();
               }}
               tintColor={colors.gold}
             />
@@ -198,8 +241,55 @@ export function MyReviewsScreen({
                 <ReviewCard
                   key={review.id}
                   review={review}
+                  onEdit={onEditReview ? () => onEditReview(review) : undefined}
                   onDelete={() => confirmDelete(review.id)}
                 />
+              ))}
+            </>
+          ) : null}
+
+          {writtenProducts.length ? (
+            <>
+              <Text style={styles.section}>Your product reviews</Text>
+              {writtenProducts.map((review) => (
+                <View key={review.id} style={styles.productReview}>
+                  <View style={styles.productReviewHeader}>
+                    <Text style={[styles.promptTitle, styles.flex]} numberOfLines={1}>
+                      {review.product_title}
+                    </Text>
+                    <Text style={styles.promptMeta}>{formatDate(review.created_at)}</Text>
+                  </View>
+                  <Stars rating={review.rating} showNumber={false} size={12} />
+                  {review.title ? (
+                    <Text style={styles.productReviewTitle}>{review.title}</Text>
+                  ) : null}
+                  {review.comment ? (
+                    <Text style={styles.productReviewBody}>{review.comment}</Text>
+                  ) : null}
+                  <View style={styles.productReviewActions}>
+                    {onEditProductReview ? (
+                      <Pressable
+                        onPress={() => onEditProductReview(review)}
+                        hitSlop={8}
+                        style={styles.productReviewAction}
+                        accessibilityRole="button"
+                        accessibilityLabel="Edit review"
+                      >
+                        <Ionicons name="create-outline" size={15} color={colors.sub} />
+                        <Text style={styles.productReviewActionText}>Edit</Text>
+                      </Pressable>
+                    ) : null}
+                    <Pressable
+                      onPress={() => confirmDeleteProduct(review.id)}
+                      hitSlop={8}
+                      style={styles.productReviewAction}
+                      accessibilityRole="button"
+                      accessibilityLabel="Delete review"
+                    >
+                      <Ionicons name="trash-outline" size={15} color={colors.red} />
+                    </Pressable>
+                  </View>
+                </View>
               ))}
             </>
           ) : null}
@@ -255,4 +345,31 @@ const styles = StyleSheet.create({
   promptCtaText: { ...typography.tiny, color: colors.goldLight },
   thumb: { width: 40, height: 40, borderRadius: radius.sm, backgroundColor: colors.surface },
   thumbEmpty: { alignItems: 'center', justifyContent: 'center' },
+  flex: { flex: 1 },
+  productReview: {
+    gap: spacing.xs,
+    backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  productReviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  productReviewTitle: { ...typography.bodyBold, color: colors.text },
+  productReviewBody: { ...typography.body, color: colors.text },
+  productReviewActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: spacing.lg,
+    marginTop: spacing.xs,
+  },
+  productReviewAction: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  productReviewActionText: { ...typography.caption, color: colors.sub },
 });

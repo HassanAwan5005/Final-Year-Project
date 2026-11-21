@@ -11,7 +11,6 @@ import secrets
 import threading
 from datetime import timedelta
 
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import transaction
@@ -70,6 +69,7 @@ def verify_otp(user, code: str, purpose: str) -> bool:
         .filter(
             user=user,
             purpose=purpose,
+            used_at__isnull=True,  # single-use: a consumed code never works again
             expires_at__gt=timezone.now(),
         )
         .order_by("-created_at")
@@ -217,7 +217,7 @@ def request_password_reset(email: str) -> str | None:
     the response is byte-identical either way and cannot be used to discover
     which addresses have accounts.
     """
-    user = User.objects.filter(email=email, is_blocked=False).first()
+    user = User.objects.filter(email__iexact=email.strip(), is_blocked=False).first()
     if user is None:
         logger.info("Password reset requested for unknown email")
         return None

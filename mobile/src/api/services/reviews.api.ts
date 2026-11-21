@@ -180,4 +180,17 @@ export const reviewsApi = {
   myProductReviews() {
     return unwrap<ProductReview[]>(api.get(ENDPOINTS.reviews.myProductReviews));
   },
+
+  updateProductReview(
+    id: number,
+    payload: { rating?: number; title?: string; comment?: string },
+  ) {
+    return unwrap<ProductReview>(
+      api.patch(ENDPOINTS.reviews.editProductReview(id), payload),
+    );
+  },
+
+  async removeProductReview(id: number): Promise<void> {
+    await api.delete(ENDPOINTS.reviews.removeProductReview(id));
+  },
 };

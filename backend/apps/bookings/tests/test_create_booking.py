@@ -296,6 +296,18 @@ def test_refuses_a_slot_that_is_already_taken(make_booking, other_buyer, photogr
         make_booking(buyer=other_buyer)
 
 
+def test_refuses_overlapping_shoot_time(make_booking, other_buyer, photographer, event_date):
+    """
+    If a 4-hour shoot is booked at 14:00 (14:00 - 18:00),
+    a second booking starting at 15:00 overlaps and must be refused.
+    """
+    _set_daily_capacity(photographer, event_date, 2)
+    make_booking()  # 14:00 - 18:00
+
+    with pytest.raises(ConflictError, match="overlaps with an existing booking"):
+        make_booking(buyer=other_buyer, start_time=time(15, 0), duration_hours=2)
+
+
 def test_a_second_booking_at_another_time_is_allowed_when_capacity_permits(
     make_booking, other_buyer, photographer, event_date
 ):

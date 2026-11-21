@@ -181,10 +181,10 @@ def _create_booking_locked(
 
     _assert_photographer_bookable(photographer, buyer)
     _assert_buyer_within_limit(buyer)
-    _assert_slot_available(photographer, event_date, start_time)
 
     # ─── Price snapshot ──────────────────────────────────────────────────────
     unit_price, quantity, hours = _price_snapshot(service, package, duration_hours)
+    _assert_slot_available(photographer, event_date, start_time, hours)
 
     booking = Booking(
         buyer=buyer,
@@ -502,9 +502,11 @@ def _assert_buyer_within_limit(buyer) -> None:
         )
 
 
-def _assert_slot_available(photographer, event_date, start_time) -> None:
+def _assert_slot_available(
+    photographer, event_date, start_time, duration_hours: int = 4
+) -> None:
     """
-    Weekday rule, blackout, capacity — then the exact start time.
+    Weekday rule, blackout, capacity — then full time interval overlap check.
 
     Runs while the photographer row is locked, so its answer is still true by
     the time the INSERT lands.
@@ -515,11 +517,18 @@ def _assert_slot_available(photographer, event_date, start_time) -> None:
     if not day.is_available:
         raise BusinessRuleViolation(day.message)
 
-    if start_time.strftime("%H:%M") in day.booked_times:
-        raise ConflictError(
-            f"{start_time:%H:%M} on {event_date:%d %b} is already booked. "
-            f"Please choose another time."
-        )
+    ref_date = datetime(2000, 1, 1).date()
+    new_start = datetime.combine(ref_date, start_time)
+    new_end = new_start + timedelta(hours=max(duration_hours or 4, 1))
+
+    for b_start, b_duration in day.booked_intervals:
+        b_dt_start = datetime.combine(ref_date, b_start)
+        b_dt_end = b_dt_start + timedelta(hours=max(b_duration, 1))
+        if new_start < b_dt_end and new_end > b_dt_start:
+            raise ConflictError(
+                f"{start_time:%H:%M} on {event_date:%d %b} is already booked (overlaps with an existing booking "
+                f"from {b_start:%H:%M} to {b_dt_end.time():%H:%M}). Please choose another time."
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -18,6 +18,8 @@ layer is redundant: this one is for humans, that one is for races.
 
 from rest_framework import serializers
 
+from apps.administration.models import FlagReason
+
 from apps.reviews.models import ProductReview, Review, ReviewImage, ReviewReply
 
 
@@ -138,23 +140,14 @@ class ReviewSerializer(serializers.ModelSerializer):
         """
         Server-computed, like `available_actions` on a booking.
 
-        The edit window and the "no reply yet" rule live in `services.py`;
-        re-deriving them in TypeScript guarantees the app eventually offers an
-        Edit button that always errors.
+        Mirrors `services._assert_editable`: the author can always edit their
+        own review unless moderation has hidden it.
         """
-        from datetime import timedelta
-
-        from django.utils import timezone
-
-        from apps.reviews.services import EDIT_WINDOW_HOURS
-
         request = self.context.get("request")
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated or obj.buyer_id != user.id:
             return False
-        if hasattr(obj, "reply"):
-            return False
-        return timezone.now() <= obj.created_at + timedelta(hours=EDIT_WINDOW_HOURS)
+        return not obj.is_hidden
 
 
 class OwnedReviewSerializer(ReviewSerializer):
@@ -285,10 +278,7 @@ class ReviewReplyWriteSerializer(serializers.Serializer):
 
 class ReviewFlagSerializer(serializers.Serializer):
     reason = serializers.ChoiceField(
-        choices=[
-            "INAPPROPRIATE", "COPYRIGHT", "SPAM", "FAKE",
-            "HARASSMENT", "OFF_PLATFORM", "OTHER",
-        ]
+        choices=FlagReason.choices
     )
     detail = serializers.CharField(max_length=1000, required=False, allow_blank=True)
 
@@ -328,6 +318,12 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         return obj.product.slug
 
 
+class ProductReviewUpdateSerializer(serializers.Serializer):
+    rating = serializers.IntegerField(min_value=1, max_value=5, required=False)
+    title = serializers.CharField(max_length=140, required=False, allow_blank=True)
+    comment = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+
+
 class ProductReviewCreateSerializer(serializers.Serializer):
     order_item = serializers.IntegerField()
     rating = serializers.IntegerField(min_value=1, max_value=5)
@@ -340,7 +336,7 @@ class ProductReviewCreateSerializer(serializers.Serializer):
         user = self.context["request"].user
         item = (
             OrderItem.objects.filter(pk=value, order__buyer=user)
-            .select_related("order", "product", "product__seller", "product__seller__user")
+            .select_related("order", "product", "product__seller")
             .first()
         )
         if item is None:

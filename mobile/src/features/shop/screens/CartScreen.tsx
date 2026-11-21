@@ -1,6 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ApiError } from '../../../api/client';
@@ -17,32 +28,36 @@ import {
   useRemoveFromCart,
 } from '../hooks/useShop';
 
+/** An 11-digit Pakistani mobile number, e.g. 03001234567. */
+const PHONE_RE = /^03\d{9}$/;
+const MIN_ADDRESS = 10;
+
 /**
- * The basket and wallet checkout.
+ * The basket and cash-on-delivery checkout.
  *
- * WHY THE SHORTFALL IS A SERVER NUMBER
- * ------------------------------------
- * `can_checkout` and `shortfall` come from the API rather than being computed
- * here from `total - balance`. Money is DECIMAL on the server and a string on
- * the wire precisely because JavaScript cannot add currency exactly; doing
- * that subtraction in JS is how a cart says "you need Rs 0" and the checkout
- * then fails with insufficient balance.
+ * There are no online payments. Adding to the cart needs nothing; only when
+ * the buyer confirms the order are they asked for a delivery address and an
+ * 11-digit phone number (both required). They pay in cash on delivery.
  */
 export function CartScreen({
   onBack,
   onOpenProduct,
-  onTopUp,
   onPurchased,
 }: {
   onBack: () => void;
   onOpenProduct: (slug: string) => void;
-  onTopUp: () => void;
   onPurchased: (orderId: number) => void;
 }) {
   const cart = useCart();
   const removeItem = useRemoveFromCart();
   const clearCart = useClearCart();
   const checkout = useCheckout();
+
+  // The confirm-order sheet and its fields. Nothing is pre-filled.
+  const [confirming, setConfirming] = useState(false);
+  const [address, setAddress] = useState('');
+  const [phone, setPhone] = useState('');
+  const [triedSubmit, setTriedSubmit] = useState(false);
 
   if (cart.isLoading) return <LoadingState label="Loading your cart…" />;
   if (cart.isError || !cart.data) {
@@ -54,25 +69,39 @@ export function CartScreen({
     );
   }
 
-  const { items, total, wallet_balance, can_checkout, shortfall, unavailable_count } =
-    cart.data;
+  const { items, total, can_checkout, unavailable_count } = cart.data;
 
-  const buy = () => {
-    checkout.mutate(undefined, {
-      onSuccess: (order) => onPurchased(order.id),
-      onError: (error) => {
-        const api = error as ApiError;
-        if (api.code === 'INSUFFICIENT_BALANCE') {
-          Alert.alert('Not enough balance', api.message, [
-            { text: 'Later', style: 'cancel' },
-            { text: 'Top up', onPress: onTopUp },
-          ]);
-          return;
-        }
-        Alert.alert('Could not complete the purchase', api.message);
-        cart.refetch();
+  const addressOk = address.trim().length >= MIN_ADDRESS;
+  const phoneOk = PHONE_RE.test(phone);
+  const showAddressError = (triedSubmit || address.length > 0) && !addressOk;
+  const showPhoneError = (triedSubmit || phone.length > 0) && !phoneOk;
+
+  const openConfirm = () => {
+    setTriedSubmit(false);
+    setConfirming(true);
+  };
+
+  const confirmOrder = () => {
+    setTriedSubmit(true);
+    if (!addressOk || !phoneOk) return;
+    checkout.mutate(
+      { delivery_address: address.trim(), delivery_phone: phone },
+      {
+        onSuccess: (order) => {
+          setConfirming(false);
+          Alert.alert(
+            'Order placed',
+            `Pay ${formatPKR(order.total)} in cash when your order is delivered.`,
+            [{ text: 'OK', onPress: () => onPurchased(order.id) }],
+            { cancelable: true, onDismiss: () => onPurchased(order.id) },
+          );
+        },
+        onError: (error) => {
+          Alert.alert('Could not place the order', (error as ApiError).message);
+          cart.refetch();
+        },
       },
-    });
+    );
   };
 
   return (
@@ -103,7 +132,7 @@ export function CartScreen({
         <EmptyState
           icon="cart-outline"
           title="Your cart is empty"
-          detail="Presets, LUTs and templates you add will show up here."
+          detail="Products you add will show up here."
         />
       ) : (
         <>
@@ -131,34 +160,92 @@ export function CartScreen({
 
           <View style={styles.footer}>
             <Row label="Subtotal" value={formatPKR(total)} />
-            <Row label="Wallet balance" value={formatPKR(wallet_balance)} muted />
-            {Number(shortfall) > 0 ? (
-              <Row label="Still needed" value={formatPKR(shortfall)} warn />
-            ) : null}
+            <Row label="Payment" value="Cash on delivery" muted />
 
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Total</Text>
               <Text style={styles.totalValue}>{formatPKR(total)}</Text>
             </View>
 
-            {can_checkout ? (
-              <Button
-                label="Pay from wallet"
-                onPress={buy}
-                loading={checkout.isPending}
-              />
-            ) : Number(shortfall) > 0 ? (
-              <Button label={`Top up ${formatPKR(shortfall)}`} onPress={onTopUp} />
-            ) : (
-              <Button label="Pay from wallet" onPress={buy} disabled />
-            )}
+            <Button label="Checkout" onPress={openConfirm} disabled={!can_checkout} />
 
-            <Text style={styles.note}>
-              Paid from your SnapSphere wallet. Downloads unlock immediately.
-            </Text>
+            <Text style={styles.note}>Pay in cash when your order is delivered.</Text>
           </View>
         </>
       )}
+
+      {/* ─── Confirm order: delivery details are required here only ─────── */}
+      <Modal
+        visible={confirming}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setConfirming(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.sheetBackdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.sheet}>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>Confirm order</Text>
+              <Pressable
+                onPress={() => setConfirming(false)}
+                hitSlop={10}
+                accessibilityLabel="Close"
+              >
+                <Ionicons name="close" size={22} color={colors.sub} />
+              </Pressable>
+            </View>
+
+            <ScrollView keyboardShouldPersistTaps="handled">
+              <Text style={styles.fieldLabel}>Delivery address *</Text>
+              <TextInput
+                value={address}
+                onChangeText={setAddress}
+                placeholder="House, street, area, city"
+                placeholderTextColor={colors.dim}
+                multiline
+                maxLength={500}
+                style={[styles.input, styles.addressInput]}
+              />
+              {showAddressError ? (
+                <Text style={styles.fieldError}>
+                  {address.trim() ? 'Enter your full address.' : 'Delivery address is required.'}
+                </Text>
+              ) : null}
+
+              <Text style={styles.fieldLabel}>Phone number *</Text>
+              <TextInput
+                value={phone}
+                onChangeText={(text) => setPhone(text.replace(/[^0-9]/g, ''))}
+                placeholder="03XXXXXXXXX"
+                placeholderTextColor={colors.dim}
+                keyboardType="number-pad"
+                maxLength={11}
+                style={styles.input}
+              />
+              {showPhoneError ? (
+                <Text style={styles.fieldError}>
+                  {phone
+                    ? 'Enter an 11-digit Pakistani mobile number, e.g. 03001234567.'
+                    : 'Phone number is required.'}
+                </Text>
+              ) : null}
+
+              <View style={styles.sheetTotal}>
+                <Text style={styles.summaryLabel}>Total (cash on delivery)</Text>
+                <Text style={styles.totalValue}>{formatPKR(total)}</Text>
+              </View>
+            </ScrollView>
+
+            <Button
+              label="Confirm order"
+              onPress={confirmOrder}
+              loading={checkout.isPending}
+            />
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -216,17 +303,15 @@ function Row({
   label,
   value,
   muted,
-  warn,
 }: {
   label: string;
   value: string;
   muted?: boolean;
-  warn?: boolean;
 }) {
   return (
     <View style={styles.summaryRow}>
       <Text style={[styles.summaryLabel, muted && styles.muted]}>{label}</Text>
-      <Text style={[styles.summaryValue, muted && styles.muted, warn && styles.warn]}>
+      <Text style={[styles.summaryValue, muted && styles.muted]}>
         {value}
       </Text>
     </View>
@@ -290,7 +375,51 @@ const styles = StyleSheet.create({
   summaryLabel: { ...typography.caption, color: colors.text },
   summaryValue: { ...typography.caption, color: colors.text },
   muted: { color: colors.sub },
-  warn: { color: colors.amber, fontWeight: '600' },
+  sheetBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+  },
+  sheet: {
+    maxHeight: '85%',
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.xl,
+    gap: spacing.md,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  sheetTitle: { ...typography.h3, color: colors.text },
+  sheetTotal: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.lg,
+  },
+  fieldLabel: {
+    ...typography.caption,
+    color: colors.text,
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
+  },
+  input: {
+    ...typography.body,
+    color: colors.text,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  addressInput: { minHeight: 70, textAlignVertical: 'top' },
+  fieldError: { ...typography.tiny, color: colors.amber, marginTop: 4 },
   totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',

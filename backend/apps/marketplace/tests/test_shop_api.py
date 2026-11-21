@@ -10,6 +10,8 @@ import pytest
 
 from apps.marketplace.services import add_to_cart, checkout
 
+DELIVERY = {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "03001234567"}
+
 pytestmark = pytest.mark.django_db
 
 URL = "/api/v1/marketplace/"
@@ -73,7 +75,7 @@ def test_search_and_filters(api_client, product, second_product):
         return {r["slug"] for r in api_client.get(f"{URL}products/?{query}").json()["data"]}
 
     assert slugs("q=desi") == {product.slug}
-    assert slugs("product_type=WEDDING_LUT") == {second_product.slug}
+    assert slugs("product_type=LENS") == {second_product.slug}
     assert slugs("max_price=2500") == {second_product.slug}
     assert slugs("on_sale=true") == {product.slug}
     assert slugs("ordering=price") == {product.slug, second_product.slug}
@@ -97,7 +99,7 @@ def test_filter_options_come_from_the_data(api_client, product, second_product):
     body = api_client.get(f"{URL}products/filters/").json()["data"]
 
     assert body["price_range"] == {"min": 2000.0, "max": 3500.0}
-    assert {t["value"] for t in body["types"]} == {"LIGHTROOM_PRESET", "WEDDING_LUT"}
+    assert {t["value"] for t in body["types"]} == {"CAMERA_ACCESSORY", "LENS"}
     assert body["sort_options"]
 
 
@@ -140,24 +142,15 @@ def test_cart_round_trip(buyer_client, product):
     assert removed.json()["data"]["count"] == 0
 
 
-def test_cart_reports_the_shortfall(buyer_client, product):
-    """The number the top-up screen needs, computed once, server-side."""
+def test_a_cart_can_check_out_without_any_balance(buyer_client, product):
+    """Cash on delivery: no wallet balance is needed."""
     body = buyer_client.post(
         f"{URL}cart/add/", {"product": product.pk}, format="json"
     ).json()["data"]
 
-    assert body["can_checkout"] is False
-    assert body["shortfall"] == "3500.00"
-
-
-def test_a_funded_cart_can_check_out(buyer_client, funded_buyer, product):
-    body = buyer_client.post(
-        f"{URL}cart/add/", {"product": product.pk}, format="json"
-    ).json()["data"]
-
-    assert body["wallet_balance"] == "50000.00"
     assert body["can_checkout"] is True
-    assert body["shortfall"] == "0"
+    assert "wallet_balance" not in body
+    assert "shortfall" not in body
 
 
 def test_cart_flags_a_line_that_went_off_sale(buyer_client, funded_buyer, product):
@@ -197,13 +190,16 @@ def test_anonymous_has_no_cart(api_client):
 def test_checkout_over_http(buyer_client, funded_buyer, product):
     add_to_cart(funded_buyer, product)
     response = buyer_client.post(
-        f"{URL}orders/checkout/", {}, format="json",
+        f"{URL}orders/checkout/", DELIVERY, format="json",
         HTTP_IDEMPOTENCY_KEY="tap-1",
     )
 
     assert response.status_code == 201
     body = response.json()["data"]
     assert body["status"] == "PAID"
+    assert body["payment_method"] == "COD"
+    assert body["delivery_address"] == DELIVERY["delivery_address"]
+    assert body["delivery_phone"] == DELIVERY["delivery_phone"]
     assert body["total"] == "3500.00"
     assert len(body["items"]) == 1
 
@@ -212,33 +208,50 @@ def test_checkout_ignores_a_client_supplied_total(buyer_client, funded_buyer, pr
     """The cart is the source of truth; the body carries no money at all."""
     add_to_cart(funded_buyer, product)
     body = buyer_client.post(
-        f"{URL}orders/checkout/", {"total": "1.00", "subtotal": "1.00"}, format="json"
+        f"{URL}orders/checkout/",
+        {**DELIVERY, "total": "1.00", "subtotal": "1.00"},
+        format="json",
     ).json()["data"]
 
     assert body["total"] == "3500.00"
 
 
-def test_a_retry_with_the_same_key_charges_once(buyer_client, funded_buyer, product):
+def test_a_retry_with_the_same_key_places_one_order(buyer_client, funded_buyer, product):
     add_to_cart(funded_buyer, product)
     headers = {"HTTP_IDEMPOTENCY_KEY": "tap-1"}
 
-    first = buyer_client.post(f"{URL}orders/checkout/", {}, format="json", **headers)
-    second = buyer_client.post(f"{URL}orders/checkout/", {}, format="json", **headers)
+    first = buyer_client.post(f"{URL}orders/checkout/", DELIVERY, format="json", **headers)
+    second = buyer_client.post(f"{URL}orders/checkout/", DELIVERY, format="json", **headers)
 
     assert first.json()["data"]["id"] == second.json()["data"]["id"]
 
 
-def test_checkout_without_funds_is_422(buyer_client, buyer, product):
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"delivery_phone": "03001234567"},
+        {"delivery_address": "House 12, Street 4, Gulberg III, Lahore"},
+        {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "12345"},
+        {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "+923001234567"},
+        {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "0300123456"},
+    ],
+)
+def test_checkout_requires_a_delivery_address_and_valid_phone(
+    buyer_client, buyer, product, body
+):
     add_to_cart(buyer, product)
-    response = buyer_client.post(f"{URL}orders/checkout/", {}, format="json")
+    response = buyer_client.post(f"{URL}orders/checkout/", body, format="json")
 
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "INSUFFICIENT_BALANCE"
+    assert response.status_code == 400
+    from apps.marketplace.models import Order
+
+    assert Order.objects.count() == 0
 
 
 def test_orders_list_and_detail(buyer_client, funded_buyer, product):
     add_to_cart(funded_buyer, product)
-    order = checkout(funded_buyer)
+    order = checkout(funded_buyer, **DELIVERY)
 
     listed = buyer_client.get(f"{URL}orders/").json()["data"]
     assert [row["order_number"] for row in listed] == [order.order_number]
@@ -249,14 +262,14 @@ def test_orders_list_and_detail(buyer_client, funded_buyer, product):
 
 def test_someone_elses_order_is_404(other_buyer_client, funded_buyer, product):
     add_to_cart(funded_buyer, product)
-    order = checkout(funded_buyer)
+    order = checkout(funded_buyer, **DELIVERY)
 
     assert other_buyer_client.get(f"{URL}orders/{order.pk}/").status_code == 404
 
 
 def test_ownership_shows_up_in_the_grid(buyer_client, funded_buyer, product):
     add_to_cart(funded_buyer, product)
-    checkout(funded_buyer)
+    checkout(funded_buyer, **DELIVERY)
 
     row = buyer_client.get(f"{URL}products/").json()["data"][0]
     assert row["is_owned"] is True
@@ -274,7 +287,7 @@ def test_seller_summary_reflects_a_sale(
     photographer_client, funded_buyer, product
 ):
     add_to_cart(funded_buyer, product)
-    checkout(funded_buyer)
+    checkout(funded_buyer, **DELIVERY)
 
     body = photographer_client.get(f"{URL}seller/products/summary/").json()["data"]
     assert body["sales_count"] == 1
@@ -282,5 +295,97 @@ def test_seller_summary_reflects_a_sale(
     assert body["net_earnings"] == "2975.00"   # 15% commission
 
 
-def test_a_buyer_has_no_seller_catalogue(buyer_client):
-    assert buyer_client.get(f"{URL}seller/products/").status_code == 404
+def test_a_buyer_starts_with_an_empty_seller_catalogue(buyer_client):
+    response = buyer_client.get(f"{URL}seller/products/")
+    assert response.status_code == 200
+    assert response.json()["data"] == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SELLING
+# ═══════════════════════════════════════════════════════════════════════════
+def _photo(name="item.png"):
+    from io import BytesIO
+
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGB", (64, 48), (200, 120, 40)).save(buffer, format="PNG")
+    return SimpleUploadedFile(name, buffer.getvalue(), content_type="image/png")
+
+
+def _listing(**overrides):
+    data = {
+        "title": "Canon 50mm f/1.8 lens",
+        "description": "Lightly used, no scratches, comes with both caps.",
+        "price": "18000",
+        "product_type": "LENS",
+        "photos": [_photo("a.png"), _photo("b.png")],
+    }
+    data.update(overrides)
+    return data
+
+
+@pytest.mark.parametrize("client_fixture", ["buyer_client", "photographer_client"])
+def test_buyers_and_photographers_can_list_a_product(request, client_fixture, settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path
+    client = request.getfixturevalue(client_fixture)
+
+    response = client.post(f"{URL}seller/products/", _listing(), format="multipart")
+
+    assert response.status_code == 201, response.content
+    body = response.json()["data"]
+    assert body["title"] == "Canon 50mm f/1.8 lens"
+    assert body["is_published"] is True
+    assert body["is_approved"] is False          # waits for admin approval
+    assert body["thumbnail_url"]
+    rows = client.get(f"{URL}seller/products/").json()["data"]
+    assert [r["slug"] for r in rows] == [body["slug"]]
+
+
+def test_a_listing_needs_a_photo(buyer_client):
+    response = buyer_client.post(
+        f"{URL}seller/products/", _listing(photos=[]), format="multipart"
+    )
+    assert response.status_code == 400
+
+
+def test_an_unapproved_listing_is_not_in_the_shop(buyer_client, settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path
+    slug = buyer_client.post(
+        f"{URL}seller/products/", _listing(), format="multipart"
+    ).json()["data"]["slug"]
+
+    rows = buyer_client.get(f"{URL}products/").json()["data"]
+    assert slug not in [r["slug"] for r in rows]
+
+
+def test_an_approved_buyer_listing_is_sold_like_any_other(
+    buyer, buyer_client, other_buyer, settings, tmp_path
+):
+    from decimal import Decimal
+
+    from apps.marketplace.models import DigitalProduct
+    from apps.profiles.models import WalletTransactionType
+    from apps.profiles.services import credit_wallet
+
+    settings.MEDIA_ROOT = tmp_path
+    slug = buyer_client.post(
+        f"{URL}seller/products/", _listing(), format="multipart"
+    ).json()["data"]["slug"]
+    DigitalProduct.objects.filter(slug=slug).update(is_approved=True)
+
+    detail = buyer_client.get(f"{URL}products/{slug}/").json()["data"]
+    assert detail["seller"]["display_name"] == buyer.full_name
+    assert len(detail["preview_image_urls"]) == 2
+
+    # Another buyer purchases it; the buyer-seller is paid.
+    credit_wallet(
+        other_buyer, Decimal("50000.00"),
+        txn_type=WalletTransactionType.TOPUP, description="test top-up",
+    )
+    product = DigitalProduct.objects.get(slug=slug)
+    add_to_cart(other_buyer, product)
+    order = checkout(other_buyer, **DELIVERY)
+    assert order.items.get().seller_id == buyer.pk

@@ -2,9 +2,9 @@
   "sentiment": {
     "name": "sentiment",
     "algorithm": "TfidfVectorizer(1,2) + LogisticRegression(balanced)",
-    "artifact_path": "/Users/mac/Desktop/akasha/ml/artifacts/sentiment.joblib",
+    "artifact_path": "E:\\photographer-booking-app\\ml\\artifacts\\sentiment.joblib",
     "training_rows": 7640,
-    "training_duration_seconds": 4.16,
+    "training_duration_seconds": 3.44,
     "metrics": {
       "accuracy": 0.7895,
       "macro_f1": 0.6807,
@@ -13,8 +13,8 @@
   },
   "ranker": {
     "name": "ranker",
-    "algorithm": "transparent weighted scorer (no learnable signal in data)",
-    "artifact_path": "/Users/mac/Desktop/akasha/ml/artifacts/ranker.joblib",
+    "algorithm": "RandomForest (learned ranker, temporal training on booking outcomes)",
+    "artifact_path": "E:\\photographer-booking-app\\ml\\artifacts\\ranker.joblib",
     "feature_order": [
       "bayesian_rating",
       "reviews_count_log",
@@ -27,31 +27,76 @@
       "recency_score",
       "price_percentile",
       "sentiment_score",
-      "portfolio_image_count"
+      "portfolio_image_count",
+      "recent_review_rating",
+      "review_velocity_log",
+      "views_90d_log",
+      "clicks_90d_log",
+      "portfolio_90d_log",
+      "inquiries_90d_log",
+      "wishlist_saves_log",
+      "rec_click_rate",
+      "conversion_rate_90d"
     ],
-    "training_rows": 0,
-    "training_duration_seconds": 4.41,
+    "training_rows": 2400,
+    "training_duration_seconds": 45.69,
     "metrics": {
-      "mode": "prior",
-      "reason": "no feature correlates with booking outcome at p<0.05",
-      "features_with_signal": 1,
-      "internal_consistency_spearman": 0.9795,
-      "weights": {
-        "bayesian_rating": 0.3,
-        "success_rate": 0.2,
-        "response_speed_score": 0.15,
-        "popularity_score": 0.12,
-        "portfolio_score_norm": 0.1,
-        "reviews_count_log": 0.06,
-        "engagement_rate": 0.04,
-        "sentiment_score": 0.03
-      }
+      "mode": "learned",
+      "target": "percentile of bookings in the next 180 days",
+      "evaluation": "temporal hold-out: last 2 snapshots; model chosen by GroupKFold CV on earlier snapshots",
+      "rmse": 0.0796,
+      "baseline_rmse": 0.2886,
+      "beats_baseline": true,
+      "r2": 0.924,
+      "spearman": 0.9617,
+      "spearman_old_formula": 0.5196,
+      "precision_at_top_10pct": 0.55,
+      "cv_rmse": {
+        "Ridge": 0.1269,
+        "RandomForest": 0.0965,
+        "GradientBoosting": 0.0968
+      },
+      "importance_by_group": {
+        "reviews": 0.0131,
+        "engagement": 0.024,
+        "track_record": 0.9549,
+        "price_experience_portfolio": 0.0081
+      },
+      "reviews_and_engagement_only": {
+        "features": 13,
+        "r2": 0.9015,
+        "spearman": 0.9499
+      },
+      "snapshots": 12
+    },
+    "feature_importance": {
+      "bayesian_rating": 0.0012,
+      "reviews_count_log": 0.0056,
+      "years_experience": 0.0019,
+      "success_rate": 0.0017,
+      "response_speed_score": 0.0011,
+      "portfolio_score_norm": 0.0004,
+      "popularity_score": 0.9521,
+      "engagement_rate": 0.0,
+      "recency_score": 0.0,
+      "price_percentile": 0.0058,
+      "sentiment_score": 0.0016,
+      "portfolio_image_count": 0.0,
+      "recent_review_rating": 0.0006,
+      "review_velocity_log": 0.0041,
+      "views_90d_log": 0.0108,
+      "clicks_90d_log": 0.004,
+      "portfolio_90d_log": 0.0,
+      "inquiries_90d_log": 0.0004,
+      "wishlist_saves_log": 0.0,
+      "rec_click_rate": 0.0,
+      "conversion_rate_90d": 0.0088
     }
   },
   "cf": {
     "name": "cf",
     "algorithm": "item-item cosine similarity on weighted implicit feedback",
-    "artifact_path": "/Users/mac/Desktop/akasha/ml/artifacts/cf.joblib",
+    "artifact_path": "E:\\photographer-booking-app\\ml\\artifacts\\cf.joblib",
     "training_rows": 498,
     "training_duration_seconds": 0.26,
     "metrics": {
@@ -64,6 +109,24 @@
       "n_buyers": 244,
       "n_photographers": 186,
       "evaluation": "leave-one-out, similarity recomputed per trial"
+    }
+  },
+  "content": {
+    "name": "content",
+    "algorithm": "TF-IDF photographer profiles + cosine similarity to buyer taste profile",
+    "artifact_path": "E:\\photographer-booking-app\\ml\\artifacts\\content.joblib",
+    "training_rows": 200,
+    "training_duration_seconds": 0.71,
+    "metrics": {
+      "vocabulary_size": 1195,
+      "hit_rate_at_10": 0.0464,
+      "hit_rate_at_20": 0.0993,
+      "mean_rank_of_held_out": 96.4,
+      "random_baseline": 0.05,
+      "popularity_baseline_at_10": 0.0927,
+      "lift": 0.93,
+      "trials": 151,
+      "evaluation": "leave-one-out on BuyerInteraction, most recent photographer held out"
     }
   }
 }

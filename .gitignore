@@ -61,3 +61,6 @@ web-build/
 # CLAUDE.md and AGENTS.md are project documentation and ARE tracked.
 **/.claude/settings.json
 **/.claude/settings.local.json
+
+# Local working copy of the report — kept out of the repository.
+final version.docx

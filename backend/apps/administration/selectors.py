@@ -89,7 +89,7 @@ def product_queue(*, approved: bool = False):
 
     return (
         DigitalProduct.objects.filter(is_published=True, is_approved=approved)
-        .select_related("seller", "seller__user")
+        .select_related("seller", "seller__photographer_profile")
         .order_by("created_at")
     )
 

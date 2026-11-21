@@ -81,7 +81,7 @@ export function DashboardScreen({
         refreshControl={
           <RefreshControl
             refreshing={dashboard.isRefetching}
-            onRefresh={() => dashboard.refetch()}
+            onRefresh={() => { void dashboard.refetch(); }}
             tintColor={colors.gold}
           />
         }

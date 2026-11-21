@@ -1,20 +1,26 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useCallback, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
+import React, { useCallback, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   FlatList,
+  Image,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { recommendationsApi } from '../../../api/services/photographers.api';
+import { photographersApi, recommendationsApi } from '../../../api/services/photographers.api';
 import { ErrorState, LoadingState } from '../../../components/feedback/States';
 import { useCurrentUser } from '../../../store/authStore';
-import type { Category, PhotographerSummary } from '../../../types/models';
+import type { Category, PhotographerSummary, Recommendation } from '../../../types/models';
 import { colors, radius, spacing, typography } from '../../../theme';
 import { useChatUnreadTotal } from '../../chat/hooks/useChat';
 import { NotificationBell } from '../../notifications/components/NotificationBell';
@@ -44,7 +50,6 @@ interface Props {
 export function HomeScreen({
   onOpenPhotographer,
   onOpenCategory,
-  onOpenSearch,
   onOpenNotifications,
   onOpenMessages,
 }: Props) {
@@ -56,6 +61,23 @@ export function HomeScreen({
   const categories = useCategories();
   const trending = useTrendingPhotographers(user?.city);
   const featured = useFeaturedPhotographers();
+  const isBuyer = user?.role === 'BUYER';
+
+  // Coming back from a photographer's profile: the personalised list follows
+  // the city of the profiles the buyer has been viewing, so ask again. Cheap —
+  // the server answers from its cache unless that city actually changed. The
+  // first focus is skipped because the query has only just loaded.
+  const refetchFeed = recommendations.refetch;
+  const firstFocus = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (firstFocus.current) {
+        firstFocus.current = false;
+        return;
+      }
+      if (isBuyer) refetchFeed();
+    }, [isBuyer, refetchFeed]),
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -76,6 +98,73 @@ export function HomeScreen({
     },
     [onOpenPhotographer],
   );
+
+  // ─── AI search: Matchmaker (typed request) + visual search (photo) ─────────
+  // Both run on the server against the signed-in buyer, so results are
+  // personalised the same way as the "Picked for you" feed.
+  const [aiQuery, setAiQuery] = useState('');
+  const [aiLoading, setAiLoading] = useState<'matchmaker' | 'visual' | null>(null);
+  const [aiResult, setAiResult] = useState<{
+    kind: 'matchmaker' | 'visual';
+    message: string;
+    image?: string;
+    photographers: Recommendation[];
+  } | null>(null);
+
+  const clearAiSearch = useCallback(() => {
+    setAiResult(null);
+    setAiQuery('');
+  }, []);
+
+  const runMatchmaker = useCallback(async () => {
+    const prompt = aiQuery.trim();
+    if (!prompt) return;
+    try {
+      setAiLoading('matchmaker');
+      const res = await photographersApi.matchmaker(prompt, {});
+      setAiResult({
+        kind: 'matchmaker',
+        message: res.assistantMessage,
+        photographers: res.photographers,
+      });
+    } catch (err: any) {
+      Alert.alert('Matchmaker', err?.message || 'Could not find matchmaker suggestions.');
+    } finally {
+      setAiLoading(null);
+    }
+  }, [aiQuery]);
+
+  const runVisualSearch = useCallback(async () => {
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permission needed', 'Please allow photo library access to search by photo.');
+        return;
+      }
+      const picked = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        quality: 0.8,
+      });
+      if (picked.canceled || !picked.assets?.[0]?.uri) return;
+
+      const uri = picked.assets[0].uri;
+      setAiLoading('visual');
+      const res = await photographersApi.visualSearch(uri, {});
+      setAiResult({
+        kind: 'visual',
+        message: res.referenceStyle
+          ? `Style: ${res.referenceStyle}`
+          : 'Photographers with a similar style',
+        image: uri,
+        photographers: res.items,
+      });
+    } catch (err: any) {
+      Alert.alert('Visual Search Error', err?.message || 'Failed to match visual style.');
+    } finally {
+      setAiLoading(null);
+    }
+  }, []);
 
   if (recommendations.isLoading && !recommendations.data) {
     return (
@@ -133,13 +222,86 @@ export function HomeScreen({
           </View>
         </View>
 
-        {/* ─── Search entry point ──────────────────────────────────────── */}
-        <Pressable onPress={onOpenSearch} style={styles.searchBar}>
-          <Ionicons name="search" size={18} color={colors.dim} />
-          <Text style={styles.searchPlaceholder}>
-            Search by name, city or category
-          </Text>
-        </Pressable>
+        {/* ─── AI search (Matchmaker + visual search) ──────────────────── */}
+        <View style={styles.searchBar}>
+          <Ionicons name="sparkles" size={17} color={colors.gold} />
+          <TextInput
+            value={aiQuery}
+            onChangeText={setAiQuery}
+            placeholder="Ask AI (e.g. Mehndi in Lahore under 40k)"
+            placeholderTextColor={colors.dim}
+            style={styles.searchInput}
+            returnKeyType="search"
+            onSubmitEditing={runMatchmaker}
+            accessibilityLabel="Ask the AI matchmaker"
+          />
+          {aiQuery.length > 0 ? (
+            <Pressable onPress={clearAiSearch} hitSlop={8}>
+              <Ionicons name="close-circle" size={17} color={colors.dim} />
+            </Pressable>
+          ) : null}
+          <Pressable
+            onPress={runVisualSearch}
+            hitSlop={6}
+            accessibilityLabel="Search by photo"
+          >
+            <Ionicons name="camera-outline" size={20} color={colors.gold} />
+          </Pressable>
+          {aiQuery.trim().length > 3 ? (
+            <Pressable
+              onPress={runMatchmaker}
+              style={styles.aiMatchButton}
+              accessibilityLabel="AI Matchmaker"
+            >
+              <Ionicons name="sparkles" size={13} color={colors.bg} />
+              <Text style={styles.aiMatchText}>Match</Text>
+            </Pressable>
+          ) : null}
+        </View>
+
+        {/* ─── AI search results ───────────────────────────────────────── */}
+        {aiLoading ? (
+          <View style={styles.aiLoadingBox}>
+            <ActivityIndicator color={colors.gold} />
+            <Text style={styles.aiLoadingText}>
+              {aiLoading === 'visual'
+                ? 'Extracting visual aesthetic embedding…'
+                : 'Parsing requirements & matching pros…'}
+            </Text>
+          </View>
+        ) : aiResult ? (
+          <>
+            <SectionHeader
+              title={aiResult.kind === 'visual' ? 'Matched by photo' : 'AI Matchmaker'}
+              badge="AI"
+            />
+            <View style={styles.aiCard}>
+              {aiResult.image ? (
+                <Image source={{ uri: aiResult.image }} style={styles.aiThumb} />
+              ) : null}
+              <View style={styles.aiCardInfo}>
+                <Text style={styles.aiCardMsg}>{aiResult.message}</Text>
+                <Text style={styles.aiCardSub}>
+                  {aiResult.photographers.length} match
+                  {aiResult.photographers.length === 1 ? '' : 'es'} found
+                </Text>
+              </View>
+              <Pressable onPress={clearAiSearch} hitSlop={10} accessibilityLabel="Clear AI search">
+                <Ionicons name="close" size={18} color={colors.sub} />
+              </Pressable>
+            </View>
+            <View style={styles.list}>
+              {aiResult.photographers.map((photographer, index) => (
+                <PhotographerCard
+                  key={`ai-${photographer.id}-${index}`}
+                  photographer={photographer}
+                  showReason
+                  onPress={() => openPhotographer(photographer.id, false)}
+                />
+              ))}
+            </View>
+          </>
+        ) : null}
 
         {/* ─── Categories ──────────────────────────────────────────────── */}
         <SectionHeader title="Browse by event" />
@@ -322,7 +484,40 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     minHeight: 46,
   },
-  searchPlaceholder: { ...typography.body, color: colors.dim },
+  searchInput: { flex: 1, ...typography.body, color: colors.text, paddingVertical: spacing.xs },
+  aiMatchButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.gold,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+  },
+  aiMatchText: { fontSize: 11, fontWeight: '700', color: colors.bg },
+  aiLoadingBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.xxl,
+    gap: spacing.sm,
+  },
+  aiLoadingText: { ...typography.caption, color: colors.sub },
+  aiCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginHorizontal: spacing.xl,
+    marginBottom: spacing.md,
+    padding: spacing.md,
+    backgroundColor: colors.card,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.gold,
+  },
+  aiThumb: { width: 48, height: 48, borderRadius: radius.sm },
+  aiCardInfo: { flex: 1, gap: 2 },
+  aiCardMsg: { ...typography.body, fontSize: 13, color: colors.text, lineHeight: 18 },
+  aiCardSub: { ...typography.tiny, color: colors.sub },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',

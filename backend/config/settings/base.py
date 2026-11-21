@@ -230,8 +230,25 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": ("apps.core.renderers.EnvelopeJSONRenderer",),
     "EXCEPTION_HANDLER": "apps.core.exceptions.custom_exception_handler",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
-    "DEFAULT_THROTTLE_CLASSES": (),
-    "DEFAULT_THROTTLE_RATES": {},
+    # Production defaults. dev.py and test.py switch the classes off so manual
+    # testing and the test suite are never blocked; the rates stay defined.
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+        "rest_framework.throttling.ScopedRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "60/min",
+        "user": "300/min",
+        "login": "5/min",
+        "register": "3/hour",
+        "otp": "3/hour",
+        "password_reset": "3/hour",
+        "search": "60/min",
+        "visual_search": "10/min",
+        "chat_send": "30/min",
+        "booking_create": "10/hour",
+    },
     "DATETIME_FORMAT": "%Y-%m-%dT%H:%M:%S%z",
     "COERCE_DECIMAL_TO_STRING": True,  # money as string — avoids JS float errors
 }
@@ -267,6 +284,13 @@ SPECTACULAR_SETTINGS = {
         "CancellationReasonEnum": "apps.bookings.constants.CancellationReason.choices",
         "PaymentMethodEnum": "apps.bookings.constants.PaymentMethod.choices",
         "PaymentStatusEnum": "apps.bookings.constants.PaymentStatus.choices",
+        "DevicePlatformEnum": "apps.accounts.models.DevicePlatform.choices",
+        "FlagReasonEnum": "apps.administration.models.FlagReason.choices",
+        "TopUpMethodEnum": [
+            ("BANK", "Bank transfer"),
+            ("EASYPAISA", "Easypaisa"),
+            ("JAZZCASH", "JazzCash"),
+        ],
     },
 }
 
@@ -396,8 +420,12 @@ MAX_DOWNLOADS_PER_PURCHASE = config("MAX_DOWNLOADS_PER_PURCHASE", default=5, cas
 ML_ARTIFACTS_DIR = Path(config("ML_ARTIFACTS_DIR", default=str(ML_DIR / "artifacts")))
 ML_DATA_RAW_DIR = ML_DIR / "data" / "raw"
 
-REC_WEIGHT_CONTENT = config("REC_WEIGHT_CONTENT", default=0.55, cast=float)
+# Hybrid blend (engine.recommend). CONTENT = similarity to the buyer's taste
+# profile, COLLAB = item-item CF, QUALITY = the trained ranker. Signals a buyer
+# has no data for are dropped and the rest re-normalised.
+REC_WEIGHT_CONTENT = config("REC_WEIGHT_CONTENT", default=0.30, cast=float)
 REC_WEIGHT_COLLAB = config("REC_WEIGHT_COLLAB", default=0.30, cast=float)
+REC_WEIGHT_QUALITY = config("REC_WEIGHT_QUALITY", default=0.25, cast=float)
 REC_WEIGHT_BUSINESS = config("REC_WEIGHT_BUSINESS", default=0.15, cast=float)
 REC_CACHE_TTL_SECONDS = config("REC_CACHE_TTL_SECONDS", default=1800, cast=int)
 REC_MIN_INTERACTIONS_FOR_CF = config("REC_MIN_INTERACTIONS_FOR_CF", default=3, cast=int)

@@ -138,7 +138,7 @@ export function PurchasesScreen({
           refreshControl={
             <RefreshControl
               refreshing={purchases.isRefetching}
-              onRefresh={() => purchases.refetch()}
+              onRefresh={() => { void purchases.refetch(); }}
               tintColor={colors.gold}
             />
           }

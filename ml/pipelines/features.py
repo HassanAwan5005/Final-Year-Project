@@ -24,11 +24,13 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-# The order is a CONTRACT. apps/recommendations/models.py
-# PhotographerFeature.as_vector() must produce exactly this sequence, or the
-# live model silently scores garbage — the worst kind of ML bug, because
-# nothing raises.
+# The order is a CONTRACT. It must equal FEATURE_ORDER in
+# backend/apps/recommendations/ranking_features.py (which computes the values
+# for both training and serving), or the live model silently scores garbage —
+# the worst kind of ML bug, because nothing raises. train_ranker.py refuses to
+# train and the engine refuses to load the ranker if the two differ.
 FEATURE_ORDER = [
+    # existing
     "bayesian_rating",
     "reviews_count_log",
     "years_experience",
@@ -41,6 +43,17 @@ FEATURE_ORDER = [
     "price_percentile",
     "sentiment_score",
     "portfolio_image_count",
+    # reviews
+    "recent_review_rating",
+    "review_velocity_log",
+    # engagement
+    "views_90d_log",
+    "clicks_90d_log",
+    "portfolio_90d_log",
+    "inquiries_90d_log",
+    "wishlist_saves_log",
+    "rec_click_rate",
+    "conversion_rate_90d",
 ]
 
 BAYESIAN_PRIOR_COUNT = 10.0   # m — how many "average" reviews to assume
@@ -152,9 +165,11 @@ def build_photographer_features(
         df["engagement_rate"] = 0.0
 
     # ─── Recency ─────────────────────────────────────────────────────────────
-    # No last-activity column exists in the CSV, so success rate stands in as
-    # the best available proxy. Live data replaces this via the feature store.
-    df["recency_score"] = df["success_rate"]
+    # Days since the photographer's last booked session, as of the dataset's
+    # own latest timestamp, halving every RECENCY_HALF_LIFE_DAYS. Never booked
+    # → 0.0. Serving computes the same thing from completed bookings
+    # (apps/recommendations/engine.py · recency_score).
+    df["recency_score"] = recency_from_interactions(df["photographer_id"], interactions)
 
     # ─── Price positioning ───────────────────────────────────────────────────
     # Percentile, not the raw price: "expensive relative to peers" is what
@@ -172,10 +187,39 @@ def build_photographer_features(
         # Derive from rating: 5★ → 1.0, 1★ → 0.0
         df["sentiment_score"] = ((df["avg_rating"] - 1.0) / 4.0).clip(0, 1)
 
-    # ─── Portfolio size proxy ────────────────────────────────────────────────
-    df["portfolio_image_count"] = (df["portfolio_score"] / 40).round().clip(0, 60)
+    # ─── Portfolio size ──────────────────────────────────────────────────────
+    # The training CSVs carry no image count, so it is ESTIMATED here from the
+    # portfolio score. Serving uses the real count of live portfolio images
+    # (engine.py), capped at the same PORTFOLIO_IMAGE_CAP.
+    df["portfolio_image_count"] = (
+        (df["portfolio_score"] / 40).round().clip(0, PORTFOLIO_IMAGE_CAP)
+    )
 
     return df
+
+
+# Must match apps/recommendations/engine.py.
+RECENCY_HALF_LIFE_DAYS = 90
+PORTFOLIO_IMAGE_CAP = 60
+
+
+def recency_from_interactions(
+    photographer_ids: pd.Series, interactions: pd.DataFrame | None
+) -> pd.Series:
+    """0.5 ** (days since last "Booked" interaction / half-life); 0.0 if never booked."""
+    if interactions is None or not len(interactions):
+        return pd.Series(0.0, index=photographer_ids.index)
+
+    booked = interactions[interactions["booking_status"] == "Booked"].dropna(
+        subset=["timestamp"]
+    )
+    as_of = interactions["timestamp"].max()
+    if booked.empty or pd.isna(as_of):
+        return pd.Series(0.0, index=photographer_ids.index)
+
+    last_booked = booked.groupby("photographer_id")["timestamp"].max()
+    days = (as_of - photographer_ids.map(last_booked)).dt.days.clip(lower=0)
+    return (0.5 ** (days / RECENCY_HALF_LIFE_DAYS)).fillna(0.0)
 
 
 def make_observed_target(

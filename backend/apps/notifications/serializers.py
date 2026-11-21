@@ -11,6 +11,8 @@ edit.
 
 from rest_framework import serializers
 
+from apps.accounts.models import DevicePlatform
+
 from apps.notifications.models import (
     Notification,
     NotificationPreference,
@@ -126,7 +128,7 @@ class PushTokenSerializer(serializers.ModelSerializer):
 
 class PushTokenRegisterSerializer(serializers.Serializer):
     token = serializers.CharField(max_length=512)
-    platform = serializers.ChoiceField(choices=["IOS", "ANDROID", "WEB"])
+    platform = serializers.ChoiceField(choices=DevicePlatform.choices)
     device_id = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 

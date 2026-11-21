@@ -396,7 +396,7 @@ export interface Review {
   helpful_count: number;
   /** Per-caller: whether *you* marked it helpful. */
   marked_helpful: boolean;
-  /** Server-computed, like `available_actions` — the 24h window plus "no reply yet". */
+  /** Server-computed: true for the author unless moderation hid the review. */
   can_edit: boolean;
   is_hidden: boolean;
   hidden_reason: string;
@@ -550,10 +550,7 @@ export interface Cart {
   subtotal: string;
   total: string;
   unavailable_count: number;
-  wallet_balance: string;
   can_checkout: boolean;
-  /** How much more the buyer needs — what the top-up screen asks for. */
-  shortfall: string;
 }
 
 export interface OrderItem {
@@ -581,7 +578,10 @@ export interface Order {
   subtotal: string;
   discount: string;
   total: string;
+  /** "COD" — every order is cash on delivery. */
   payment_method: string;
+  delivery_address: string;
+  delivery_phone: string;
   paid_at: string | null;
   created_at: string;
   items: OrderItem[];
@@ -1102,5 +1102,23 @@ export interface PortfolioImage {
   like_count: number;
   album_id: number | null;
   category: CategoryMini | null;
+  created_at: string;
+}
+
+/** A product in the admin moderation queue (mirrors AdminProductSerializer). */
+export interface AdminListing {
+  id: number;
+  title: string;
+  slug: string;
+  product_type: string;
+  type_label: string;
+  price: string;
+  seller_name: string;
+  description: string;
+  thumbnail_url: string | null;
+  preview_image_urls: string[];
+  is_published: boolean;
+  is_approved: boolean;
+  file_count: number;
   created_at: string;
 }

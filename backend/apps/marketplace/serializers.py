@@ -14,6 +14,8 @@ server; a client that can name its own total buys a Rs 12,000 preset pack for
 one rupee.
 """
 
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from apps.catalog.serializers import CategoryMiniSerializer
@@ -32,14 +34,29 @@ def _absolute(request, file_field) -> str | None:
     return request.build_absolute_uri(file_field.url) if request else file_field.url
 
 
+def seller_display_name(user) -> str:
+    """A photographer seller shows their studio name; anyone else, their name."""
+    profile = getattr(user, "photographer_profile", None)
+    return profile.display_name if profile else user.full_name
+
+
 class SellerMiniSerializer(serializers.Serializer):
+    """The seller is a user account — a photographer or a buyer."""
+
     id = serializers.IntegerField()
-    display_name = serializers.CharField()
+    display_name = serializers.SerializerMethodField()
     avatar_url = serializers.SerializerMethodField()
-    is_verified = serializers.BooleanField()
+    is_verified = serializers.SerializerMethodField()
+
+    def get_display_name(self, obj) -> str:
+        return seller_display_name(obj)
 
     def get_avatar_url(self, obj) -> str | None:
-        return _absolute(self.context.get("request"), obj.user.avatar)
+        return _absolute(self.context.get("request"), obj.avatar)
+
+    def get_is_verified(self, obj) -> bool:
+        profile = getattr(obj, "photographer_profile", None)
+        return bool(profile and profile.is_verified)
 
 
 class ProductFileSerializer(serializers.ModelSerializer):
@@ -139,23 +156,13 @@ class CartSerializer(serializers.Serializer):
     subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     unavailable_count = serializers.IntegerField(read_only=True)
-    wallet_balance = serializers.DecimalField(
-        max_digits=14, decimal_places=2, read_only=True
-    )
     can_checkout = serializers.SerializerMethodField()
-    shortfall = serializers.SerializerMethodField()
 
     def get_can_checkout(self, obj) -> bool:
         return bool(
             obj["count"] > 0
             and obj["unavailable_count"] == 0
-            and obj["wallet_balance"] >= obj["total"]
         )
-
-    def get_shortfall(self, obj) -> str:
-        """How much more the buyer needs — the number the top-up screen wants."""
-        gap = obj["total"] - obj["wallet_balance"]
-        return str(gap if gap > 0 else 0)
 
 
 class AddToCartSerializer(serializers.Serializer):
@@ -170,7 +177,7 @@ class AddToCartSerializer(serializers.Serializer):
 class OrderItemSerializer(serializers.ModelSerializer):
     product_slug = serializers.CharField(source="product.slug", read_only=True)
     thumbnail_url = serializers.SerializerMethodField()
-    seller_name = serializers.CharField(source="seller.display_name", read_only=True)
+    seller_name = serializers.SerializerMethodField()
     downloads_remaining = serializers.IntegerField(read_only=True)
     files = serializers.SerializerMethodField()
 
@@ -184,6 +191,9 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
     def get_thumbnail_url(self, obj) -> str | None:
         return _absolute(self.context.get("request"), obj.product.thumbnail)
+
+    def get_seller_name(self, obj) -> str:
+        return seller_display_name(obj.seller)
 
     def get_files(self, obj) -> list:
         return ProductFileSerializer(obj.product.files.all(), many=True).data
@@ -199,6 +209,7 @@ class OrderSerializer(serializers.ModelSerializer):
         fields = (
             "id", "uuid", "order_number", "status", "status_label",
             "subtotal", "discount", "total", "payment_method",
+            "delivery_address", "delivery_phone",
             "paid_at", "created_at", "items", "item_count",
         )
 
@@ -208,11 +219,42 @@ class OrderSerializer(serializers.ModelSerializer):
 
 class CheckoutSerializer(serializers.Serializer):
     """
-    Intentionally empty of money.
+    Cash on delivery: where to deliver, and a phone to call. Both required.
 
-    The cart is the source of truth for what is being bought and what it costs.
-    An `Idempotency-Key` header — not a body field — makes the retry safe.
+    Still intentionally empty of money — the cart is the source of truth for
+    what is being bought and what it costs. An `Idempotency-Key` header makes
+    a retry safe.
     """
+
+    delivery_address = serializers.CharField(
+        min_length=10, max_length=500,
+        error_messages={
+            "required": "Enter your delivery address.",
+            "blank": "Enter your delivery address.",
+            "min_length": "Enter your full delivery address (house, street, area, city).",
+        },
+    )
+    delivery_phone = serializers.CharField(
+        max_length=20,
+        error_messages={
+            "required": "Enter a phone number for delivery.",
+            "blank": "Enter a phone number for delivery.",
+        },
+    )
+
+    def validate_delivery_address(self, value: str) -> str:
+        return value.strip()
+
+    def validate_delivery_phone(self, value: str) -> str:
+        """An 11-digit Pakistani mobile number, e.g. 03001234567."""
+        import re
+
+        cleaned = value.strip().replace(" ", "").replace("-", "")
+        if not re.fullmatch(r"03\d{9}", cleaned):
+            raise serializers.ValidationError(
+                "Enter an 11-digit Pakistani mobile number, e.g. 03001234567."
+            )
+        return cleaned
 
 
 class DownloadRequestSerializer(serializers.Serializer):
@@ -244,6 +286,40 @@ class SellerProductSerializer(ProductListSerializer):
             "is_published", "is_approved", "published_at", "view_count",
             "wishlist_count", "total_revenue",
         )
+
+
+class SellerProductCreateSerializer(serializers.Serializer):
+    """A new listing from the Sell screen: photos, details and a price."""
+
+    MAX_PHOTOS = 5
+
+    title = serializers.CharField(min_length=3, max_length=160)
+    description = serializers.CharField(min_length=10, max_length=5000)
+    price = serializers.DecimalField(
+        max_digits=10, decimal_places=2, min_value=Decimal("1")
+    )
+    product_type = serializers.ChoiceField(
+        choices=DigitalProduct._meta.get_field("product_type").choices
+    )
+    photos = serializers.ListField(
+        child=serializers.ImageField(),
+        min_length=1,
+        max_length=MAX_PHOTOS,
+        error_messages={"min_length": "Add at least one photo of the product."},
+    )
+
+    def validate_photos(self, photos):
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        from apps.core.validators import validate_image_file
+
+        for photo in photos:
+            try:
+                validate_image_file(photo)
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError(exc.messages) from exc
+            photo.seek(0)
+        return photos
 
 
 class SellerSummarySerializer(serializers.Serializer):

@@ -163,4 +163,11 @@ export const chatApi = {
       api.get(ENDPOINTS.chat.contacts, { params: { q: term || undefined } }),
     );
   },
+
+  /** Dynamic Smart Reply Suggestions for quick responses to keep response time near instant */
+  smartReplies(conversationId: number | string) {
+    return unwrap<{ text: string; category: string; confidence: number }[]>(
+      api.get(ENDPOINTS.chat.smartReplies(conversationId)),
+    );
+  },
 };

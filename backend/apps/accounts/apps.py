@@ -6,3 +6,7 @@ class AccountsConfig(AppConfig):
     name = "apps.accounts"
     label = "accounts"
     verbose_name = "Accounts & Authentication"
+
+    def ready(self):
+        # Registers the OpenAPI extension for SnapSphereJWTAuthentication.
+        from apps.accounts import schema  # noqa: F401

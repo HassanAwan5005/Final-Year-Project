@@ -38,12 +38,10 @@ export function ProductDetailScreen({
   slug,
   onBack,
   onOpenCart,
-  onTopUp,
 }: {
   slug: string;
   onBack: () => void;
   onOpenCart: () => void;
-  onTopUp: () => void;
 }) {
   const { width } = useWindowDimensions();
   const query = useProduct(slug);
@@ -62,8 +60,6 @@ export function ProductDetailScreen({
   }
 
   const product = query.data;
-  const balance = Number(cart.data?.wallet_balance ?? 0);
-  const affordable = balance >= Number(product.price);
 
   const add = () => {
     addToCart.mutate(product.id, {
@@ -216,14 +212,6 @@ export function ProductDetailScreen({
               onPress={add}
               loading={addToCart.isPending}
             />
-            {!affordable && cart.data ? (
-              <Pressable onPress={onTopUp} style={styles.shortfall}>
-                <Ionicons name="information-circle-outline" size={14} color={colors.amber} />
-                <Text style={styles.shortfallText}>
-                  Your balance is {formatPKR(cart.data.wallet_balance)} — top up to buy.
-                </Text>
-              </Pressable>
-            ) : null}
           </>
         )}
       </View>
@@ -342,12 +330,4 @@ const styles = StyleSheet.create({
   },
   ownedBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   ownedText: { ...typography.caption, color: colors.green, flex: 1 },
-  shortfall: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs + 2,
-    marginTop: spacing.md,
-  },
-  shortfallText: { ...typography.tiny, color: colors.amber },
 });

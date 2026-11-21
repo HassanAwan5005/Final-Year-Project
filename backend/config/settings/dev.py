@@ -18,7 +18,7 @@ ALLOWED_HOSTS = ["*"]
 # ═══════════════════════════════════════════════════════════════════════════
 CORS_ALLOW_ALL_ORIGINS = True
 
-EMAIL_BACKEND = config(
+EMAIL_BACKEND = config(  # noqa: F405
     "EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend"
 )
 
@@ -30,7 +30,7 @@ CELERY_TASK_EAGER_PROPAGATES = True
 LOGGING["loggers"]["django.db.backends"]["level"] = "INFO"  # noqa: F405
 
 # Disable all throttling in dev so manual testing is never blocked
-REST_FRAMEWORK["DEFAULT_THROTTLE_CLASSES"] = ()
+REST_FRAMEWORK["DEFAULT_THROTTLE_CLASSES"] = ()  # noqa: F405
 
 # Browsable API is handy in dev but must never ship to production.
 REST_FRAMEWORK["DEFAULT_RENDERER_CLASSES"] = (  # noqa: F405

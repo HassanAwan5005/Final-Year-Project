@@ -1,10 +1,9 @@
 """
-Cart and wallet checkout — Module 8.
+Cart and cash-on-delivery checkout — Module 8.
 
-The property under test throughout: money and goods move together, or neither
-moves. Every failure path below is checked for *both* halves — a buyer who was
-charged must own something, and a buyer who owns nothing must not have been
-charged.
+There are no online payments: an order needs a delivery address and phone,
+and no wallet is debited or credited. Failure paths must leave no order
+behind.
 """
 
 from decimal import Decimal
@@ -20,6 +19,8 @@ from apps.marketplace.services import (
     remove_from_cart,
 )
 from apps.profiles.models import Wallet, WalletTransaction
+
+DELIVERY = {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "03001234567"}
 
 pytestmark = pytest.mark.django_db
 
@@ -58,7 +59,7 @@ def test_cannot_cart_an_unpublished_product(buyer, product):
 
 def test_cannot_cart_something_already_owned(funded_buyer, product):
     add_to_cart(funded_buyer, product)
-    checkout(funded_buyer)
+    checkout(funded_buyer, **DELIVERY)
 
     with pytest.raises(BusinessRuleViolation, match="already own"):
         add_to_cart(funded_buyer, product)
@@ -80,7 +81,7 @@ def test_remove_and_clear(buyer, product, second_product):
 # ═══════════════════════════════════════════════════════════════════════════
 def test_checkout_creates_a_paid_order(funded_buyer, product):
     add_to_cart(funded_buyer, product)
-    order = checkout(funded_buyer)
+    order = checkout(funded_buyer, **DELIVERY)
 
     assert order.status == OrderStatus.PAID
     assert order.paid_at is not None
@@ -88,23 +89,38 @@ def test_checkout_creates_a_paid_order(funded_buyer, product):
     assert order.items.count() == 1
 
 
-def test_checkout_debits_the_wallet_exactly_once(funded_buyer, product):
+def test_checkout_is_cash_on_delivery_and_stores_the_address(funded_buyer, product):
+    add_to_cart(funded_buyer, product)
+    order = checkout(funded_buyer, **DELIVERY)
+
+    assert order.payment_method == "COD"
+    assert order.delivery_address == DELIVERY["delivery_address"]
+    assert order.delivery_phone == DELIVERY["delivery_phone"]
+
+
+def test_checkout_does_not_touch_any_wallet(funded_buyer, product, photographer):
     before = balance(funded_buyer)
     add_to_cart(funded_buyer, product)
-    checkout(funded_buyer)
+    checkout(funded_buyer, **DELIVERY)
 
-    assert balance(funded_buyer) == before - product.price
-    assert (
-        WalletTransaction.objects.filter(
-            wallet__user=funded_buyer, txn_type="PURCHASE"
-        ).count()
-        == 1
-    )
+    assert balance(funded_buyer) == before
+    assert not WalletTransaction.objects.filter(
+        txn_type__in=["PURCHASE", "EARNING"]
+    ).exists()
 
 
-def test_checkout_credits_the_seller_net_of_commission(funded_buyer, product, photographer):
+def test_a_buyer_with_no_balance_can_order(buyer, product):
+    """No credit needed: the buyer pays cash on delivery."""
+    add_to_cart(buyer, product)
+    order = checkout(buyer, **DELIVERY)
+
+    assert order.status == OrderStatus.PAID
+    assert order.items.count() == 1
+
+
+def test_checkout_records_the_seller_share(funded_buyer, product):
     add_to_cart(funded_buyer, product)
-    order = checkout(funded_buyer)
+    order = checkout(funded_buyer, **DELIVERY)
     item = order.items.first()
 
     expected_commission = (
@@ -113,33 +129,11 @@ def test_checkout_credits_the_seller_net_of_commission(funded_buyer, product, ph
 
     assert item.commission_amount == expected_commission
     assert item.seller_earning == product.price - expected_commission
-    assert balance(photographer.user) == item.seller_earning
-
-
-def test_one_seller_is_credited_once_for_a_multi_item_basket(
-    funded_buyer, product, second_product, photographer
-):
-    """
-    Three products from one photographer must move their balance once, not
-    three times, or the ledger reads like three separate sales.
-    """
-    add_to_cart(funded_buyer, product)
-    add_to_cart(funded_buyer, second_product)
-    order = checkout(funded_buyer)
-
-    earnings = sum(item.seller_earning for item in order.items.all())
-    assert balance(photographer.user) == earnings
-    assert (
-        WalletTransaction.objects.filter(
-            wallet__user=photographer.user, txn_type="EARNING"
-        ).count()
-        == 1
-    )
 
 
 def test_checkout_snapshots_the_price(funded_buyer, product):
     add_to_cart(funded_buyer, product)
-    order = checkout(funded_buyer)
+    order = checkout(funded_buyer, **DELIVERY)
 
     product.price = Decimal("9999.00")
     product.save(update_fields=["price"])
@@ -152,28 +146,32 @@ def test_checkout_snapshots_the_price(funded_buyer, product):
 
 def test_checkout_empties_the_cart(funded_buyer, product):
     add_to_cart(funded_buyer, product)
-    checkout(funded_buyer)
+    checkout(funded_buyer, **DELIVERY)
     assert CartItem.objects.filter(user=funded_buyer).count() == 0
 
 
 def test_checkout_bumps_product_metrics(funded_buyer, product):
     add_to_cart(funded_buyer, product)
-    checkout(funded_buyer)
+    checkout(funded_buyer, **DELIVERY)
     product.refresh_from_db()
 
     assert product.sales_count == 1
     assert product.total_revenue == product.price
 
 
-def test_checkout_notifies_the_seller(funded_buyer, product, photographer):
+def test_checkout_notifies_the_seller_with_the_delivery_details(
+    funded_buyer, product, photographer
+):
     from apps.notifications.models import Notification
 
     add_to_cart(funded_buyer, product)
-    checkout(funded_buyer)
+    checkout(funded_buyer, **DELIVERY)
 
-    assert Notification.objects.filter(
+    note = Notification.objects.get(
         recipient=photographer.user, notification_type="PRODUCT_SOLD"
-    ).exists()
+    )
+    assert DELIVERY["delivery_address"] in note.body
+    assert DELIVERY["delivery_phone"] in note.body
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -182,26 +180,20 @@ def test_checkout_notifies_the_seller(funded_buyer, product, photographer):
 # ═══════════════════════════════════════════════════════════════════════════
 def test_empty_cart_is_refused(funded_buyer):
     with pytest.raises(BusinessRuleViolation, match="cart is empty"):
-        checkout(funded_buyer)
+        checkout(funded_buyer, **DELIVERY)
     assert Order.objects.count() == 0
 
 
-def test_insufficient_balance_leaves_nothing_behind(buyer, product):
-    """
-    The buyer has Rs 0. The order row is created before the debit, so this is
-    the test that proves the rollback actually rolls the order back too.
-    """
-    from apps.core.exceptions import InsufficientBalance
-
+@pytest.mark.parametrize(
+    "missing", [{"delivery_address": ""}, {"delivery_phone": ""}]
+)
+def test_an_order_needs_an_address_and_a_phone(buyer, product, missing):
     add_to_cart(buyer, product)
 
-    with pytest.raises(InsufficientBalance):
-        checkout(buyer)
+    with pytest.raises(BusinessRuleViolation, match="address and phone"):
+        checkout(buyer, **{**DELIVERY, **missing})
 
     assert Order.objects.count() == 0
-    assert OrderItem.objects.count() == 0
-    assert balance(buyer) == Decimal("0.00")
-    # The cart survives, so the buyer can top up and try again.
     assert CartItem.objects.filter(user=buyer).count() == 1
 
 
@@ -213,7 +205,7 @@ def test_a_delisted_product_blocks_checkout_without_charging(funded_buyer, produ
     product.save(update_fields=["is_published"])
 
     with pytest.raises(ResourceGone, match="no longer on sale"):
-        checkout(funded_buyer)
+        checkout(funded_buyer, **DELIVERY)
 
     assert balance(funded_buyer) == before
     assert Order.objects.count() == 0
@@ -221,7 +213,7 @@ def test_a_delisted_product_blocks_checkout_without_charging(funded_buyer, produ
 
 def test_already_owned_item_in_cart_blocks_checkout(funded_buyer, product, second_product):
     add_to_cart(funded_buyer, product)
-    checkout(funded_buyer)
+    checkout(funded_buyer, **DELIVERY)
 
     # Force it back into the cart the way a stale client would.
     CartItem.objects.create(user=funded_buyer, product=product)
@@ -229,28 +221,10 @@ def test_already_owned_item_in_cart_blocks_checkout(funded_buyer, product, secon
     before = balance(funded_buyer)
 
     with pytest.raises(BusinessRuleViolation, match="already own"):
-        checkout(funded_buyer)
+        checkout(funded_buyer, **DELIVERY)
 
     assert balance(funded_buyer) == before
     assert Order.objects.filter(status=OrderStatus.PAID).count() == 1
-
-
-def test_the_wallet_can_never_go_negative(buyer, product):
-    """`ck_wallet_no_overdraft` backs the application check."""
-    from apps.profiles.models import WalletTransactionType
-    from apps.profiles.services import credit_wallet
-
-    credit_wallet(
-        buyer, Decimal("100.00"), txn_type=WalletTransactionType.TOPUP
-    )
-    add_to_cart(buyer, product)
-
-    from apps.core.exceptions import InsufficientBalance
-
-    with pytest.raises(InsufficientBalance):
-        checkout(buyer)
-
-    assert balance(buyer) == Decimal("100.00")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -258,29 +232,28 @@ def test_the_wallet_can_never_go_negative(buyer, product):
 # ═══════════════════════════════════════════════════════════════════════════
 def test_the_same_key_returns_the_same_order(funded_buyer, product):
     add_to_cart(funded_buyer, product)
-    first = checkout(funded_buyer, idempotency_key="tap-1")
-    second = checkout(funded_buyer, idempotency_key="tap-1")
+    first = checkout(funded_buyer, **DELIVERY, idempotency_key="tap-1")
+    second = checkout(funded_buyer, **DELIVERY, idempotency_key="tap-1")
 
     assert first.pk == second.pk
     assert Order.objects.count() == 1
 
 
-def test_a_double_tap_charges_once(funded_buyer, product):
-    before = balance(funded_buyer)
+def test_a_double_tap_places_one_order(funded_buyer, product):
     add_to_cart(funded_buyer, product)
 
-    checkout(funded_buyer, idempotency_key="tap-1")
-    checkout(funded_buyer, idempotency_key="tap-1")
+    checkout(funded_buyer, **DELIVERY, idempotency_key="tap-1")
+    checkout(funded_buyer, **DELIVERY, idempotency_key="tap-1")
 
-    assert balance(funded_buyer) == before - product.price
+    assert Order.objects.count() == 1
 
 
 def test_a_different_key_is_a_different_purchase(funded_buyer, product, second_product):
     add_to_cart(funded_buyer, product)
-    first = checkout(funded_buyer, idempotency_key="tap-1")
+    first = checkout(funded_buyer, **DELIVERY, idempotency_key="tap-1")
 
     add_to_cart(funded_buyer, second_product)
-    second = checkout(funded_buyer, idempotency_key="tap-2")
+    second = checkout(funded_buyer, **DELIVERY, idempotency_key="tap-2")
 
     assert first.pk != second.pk
     assert Order.objects.count() == 2

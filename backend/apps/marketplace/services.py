@@ -3,27 +3,20 @@ Marketplace write logic — Module 8.
 
 WHY THERE IS NO PAYMENT GATEWAY HERE
 ------------------------------------
-The proposal excludes online payments, so a purchase is a wallet debit: the
-buyer tops up by bank transfer or Easypaisa, an admin verifies the receipt,
-and the balance is then spendable instantly. That keeps downloads immediate —
-the thing a digital product must be — without pretending to integrate a
-payment processor the project never scoped.
+The app does not take online payments. Every purchase is CASH ON DELIVERY:
+the buyer gives a delivery address and phone number at checkout, the seller
+is notified with them, delivers, and collects the cash. No wallet balance is
+needed to buy and none is debited or credited.
 
 WHAT CHECKOUT GUARANTEES
 ------------------------
-1. MONEY AND GOODS MOVE TOGETHER. The wallet debit, the order, the items and
-   every seller credit happen in ONE `transaction.atomic()`. There is no
-   window in which a buyer has been charged but owns nothing, or owns
-   something nobody was paid for.
-2. THE WALLET CANNOT GO NEGATIVE. `debit_wallet` takes `select_for_update()`
-   on the wallet row, so two devices checking out at once serialize instead of
-   both reading the same balance. `ck_wallet_no_overdraft` backs it in the
-   database.
+1. ALL OR NOTHING. The order, its items and the cart clean-up happen in ONE
+   `transaction.atomic()`.
+2. A DELIVERY ADDRESS AND PHONE ARE REQUIRED for every order.
 3. PRICES ARE SNAPSHOTTED onto OrderItem. An order is a receipt, and a receipt
    that changes when the seller edits their listing is not a receipt.
 4. RETRIES ARE SAFE. `Order.idempotency_key` is uniquely constrained per
-   buyer, so a double-tap on Checkout cannot produce two orders — and cannot
-   charge twice.
+   buyer, so a double-tap on Checkout cannot produce two orders.
 
 THE DOWNLOAD FLOW
 -----------------
@@ -71,7 +64,7 @@ def add_to_cart(user, product: DigitalProduct) -> CartItem:
     _assert_buyer(user)
     _assert_purchasable(product)
 
-    if product.seller.user_id == user.id:
+    if product.seller_id == user.id:
         raise BusinessRuleViolation("This is your own product.")
 
     from apps.marketplace.selectors import owns_product
@@ -102,11 +95,19 @@ def clear_cart(user) -> int:
 # ═══════════════════════════════════════════════════════════════════════════
 # CHECKOUT
 # ═══════════════════════════════════════════════════════════════════════════
-def checkout(user, *, idempotency_key: str = "") -> Order:
+def checkout(
+    user,
+    *,
+    delivery_address: str,
+    delivery_phone: str,
+    idempotency_key: str = "",
+) -> Order:
     """
-    Turn the cart into a paid order.
+    Turn the cart into a confirmed cash-on-delivery order.
 
-    Everything below the `atomic()` either all happens or none of it does.
+    No money moves in the app: the buyer pays the seller in cash on delivery,
+    so there is no wallet debit and no seller credit. Everything below the
+    `atomic()` either all happens or none of it does.
     """
     _assert_buyer(user)
 
@@ -119,7 +120,9 @@ def checkout(user, *, idempotency_key: str = "") -> Order:
             return existing
 
     try:
-        return _checkout_atomic(user, idempotency_key)
+        return _checkout_atomic(
+            user, idempotency_key, delivery_address.strip(), delivery_phone.strip()
+        )
     except IntegrityError as exc:
         # Two genuinely simultaneous submits: the unique constraint caught the
         # loser. Return the winner's order rather than an error — the buyer
@@ -134,18 +137,20 @@ def checkout(user, *, idempotency_key: str = "") -> Order:
 
 
 @transaction.atomic
-def _checkout_atomic(user, idempotency_key: str) -> Order:
+def _checkout_atomic(
+    user, idempotency_key: str, delivery_address: str, delivery_phone: str
+) -> Order:
     from apps.marketplace.selectors import owned_product_ids
-    from apps.profiles.models import WalletTransactionType
-    from apps.profiles.services import credit_wallet, debit_wallet
 
     items = list(
         CartItem.objects.select_for_update()
         .filter(user=user)
-        .select_related("product", "product__seller", "product__seller__user")
+        .select_related("product", "product__seller")
     )
     if not items:
         raise BusinessRuleViolation("Your cart is empty.")
+    if not delivery_address or not delivery_phone:
+        raise BusinessRuleViolation("A delivery address and phone number are required.")
 
     owned = owned_product_ids(user)
     purchasable = []
@@ -169,20 +174,10 @@ def _checkout_atomic(user, idempotency_key: str) -> Order:
         discount=Decimal("0.00"),
         total=subtotal,
         status=OrderStatus.PENDING,
-        payment_method="WALLET",
+        payment_method="COD",
+        delivery_address=delivery_address,
+        delivery_phone=delivery_phone,
         idempotency_key=idempotency_key,
-    )
-
-    # ─── Pay first, then grant ───────────────────────────────────────────────
-    # debit_wallet raises InsufficientBalance, which rolls the whole block back
-    # including the order above. Creating the items before the debit would mean
-    # a failed payment still left a receipt behind.
-    debit_wallet(
-        user,
-        subtotal,
-        txn_type=WalletTransactionType.PURCHASE,
-        reference=order.order_number,
-        description=f"{len(purchasable)} item(s) from the SnapSphere shop",
     )
 
     order_items = []
@@ -204,48 +199,23 @@ def _checkout_atomic(user, idempotency_key: str) -> Order:
         )
     OrderItem.objects.bulk_create(order_items)
 
+    # Cash on delivery: PAID here means "order confirmed". The buyer pays the
+    # seller in cash on delivery, so no wallet is debited or credited.
     order.status = OrderStatus.PAID
     order.paid_at = timezone.now()
     order.save(update_fields=["status", "paid_at", "updated_at"])
 
-    _credit_sellers(order_items, order, credit_wallet, WalletTransactionType)
     _bump_product_metrics(order_items)
 
     CartItem.objects.filter(user=user).delete()
 
-    _notify_sellers(order_items, user)
+    _notify_sellers(order_items, user, order)
 
     logger.info(
-        "Order paid",
+        "Order placed (cash on delivery)",
         extra={"order_id": order.pk, "buyer_id": user.id, "total": str(subtotal)},
     )
     return order
-
-
-def _credit_sellers(order_items, order, credit_wallet, WalletTransactionType) -> None:
-    """
-    Pay each seller their share, in the same transaction as the debit.
-
-    Earnings are aggregated per seller first: a basket with three products from
-    one photographer should move their balance once, not three times, or the
-    ledger reads like three separate sales.
-    """
-    by_seller: dict[int, tuple[object, Decimal]] = {}
-    for item in order_items:
-        seller_user = item.seller.user
-        current = by_seller.get(seller_user.id, (seller_user, Decimal("0.00")))
-        by_seller[seller_user.id] = (seller_user, current[1] + item.seller_earning)
-
-    for seller_user, amount in by_seller.values():
-        if amount <= 0:
-            continue
-        credit_wallet(
-            seller_user,
-            amount,
-            txn_type=WalletTransactionType.EARNING,
-            reference=order.order_number,
-            description="Marketplace sale",
-        )
 
 
 def _bump_product_metrics(order_items) -> None:
@@ -259,20 +229,27 @@ def _bump_product_metrics(order_items) -> None:
             sales_count=F("sales_count") + 1,
             total_revenue=F("total_revenue") + item.price,
         )
-        PhotographerProfile.objects.filter(pk=item.seller_id).update(
+        # Only photographer sellers keep a lifetime earnings counter.
+        PhotographerProfile.objects.filter(user_id=item.seller_id).update(
             total_earnings=F("total_earnings") + item.seller_earning
         )
 
 
-def _notify_sellers(order_items, buyer) -> None:
+def _notify_sellers(order_items, buyer, order) -> None:
+    """The seller delivers and collects the cash, so they get where and who."""
     from apps.notifications.services import notify
 
     for item in order_items:
         notify(
-            item.seller.user,
+            item.seller,
             "PRODUCT_SOLD",
-            title="You made a sale",
-            body=f'{buyer.full_name} bought "{item.product_title}".',
+            title="New cash-on-delivery order",
+            body=(
+                f'{buyer.full_name} ordered "{item.product_title}". '
+                f"Deliver to: {order.delivery_address[:250]}. "
+                f"Phone: {order.delivery_phone}. "
+                "Collect cash on delivery."
+            ),
             action_screen="SellerProducts",
             action_id=str(item.product_id),
             actor=buyer,
@@ -356,6 +333,60 @@ def redeem_download_token(token_value: str, *, ip_address: str | None = None) ->
 # ═══════════════════════════════════════════════════════════════════════════
 # GUARDS
 # ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# SELLING
+# ═══════════════════════════════════════════════════════════════════════════
+@transaction.atomic
+def create_listing(
+    user, *, title: str, description: str, price, product_type: str, photos: list
+) -> DigitalProduct:
+    """
+    List a product for sale — open to buyers and photographers alike.
+
+    The listing is published straight away but NOT approved: it waits in the
+    admin moderation queue (`is_published=True, is_approved=False`) and only
+    appears in the shop once an admin approves it.
+
+    Photos are resized and re-encoded, which also strips EXIF (phone photos
+    carry GPS). The first photo becomes the thumbnail; every photo is kept as
+    a preview, stored as a storage-relative path like the seeded products.
+    """
+    from django.core.files.storage import default_storage
+
+    from apps.core.utils import process_image
+
+    if getattr(user, "role", None) not in ("BUYER", "PHOTOGRAPHER"):
+        raise BusinessRuleViolation("Only buyer and photographer accounts can sell.")
+
+    product = DigitalProduct(
+        seller=user,
+        title=title.strip(),
+        description=description.strip(),
+        price=price,
+        product_type=product_type,
+        file_count=0,
+        is_published=True,
+        is_approved=False,
+        published_at=timezone.now(),
+    )
+
+    cover = photos[0]
+    cover.seek(0)
+    thumb = process_image(cover, size_key="medium")
+    product.thumbnail.save(thumb.name, thumb, save=False)
+
+    previews = []
+    for photo in photos:
+        photo.seek(0)
+        large = process_image(photo, size_key="large")
+        previews.append(default_storage.save(f"products/previews/{large.name}", large))
+    product.preview_images = previews
+
+    product.save()
+    logger.info("Listing created", extra={"product_id": product.pk, "seller_id": user.pk})
+    return product
+
+
 def _assert_buyer(user) -> None:
     from apps.core.constants import UserRole
 

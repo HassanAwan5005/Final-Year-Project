@@ -160,12 +160,18 @@ def _interactions_by_photographer(BuyerInteraction, target: date_cls) -> dict[in
 def _product_earnings_by_seller(OrderItem, OrderStatus, target: date_cls) -> dict[int, Decimal]:
     rows = (
         OrderItem.objects.filter(
-            order__status=OrderStatus.PAID, order__paid_at__date=target
+            order__status=OrderStatus.PAID,
+            order__paid_at__date=target,
+            # Buyer sellers have no photographer dashboard to roll up into.
+            seller__photographer_profile__isnull=False,
         )
-        .values("seller_id")
+        .values("seller__photographer_profile__id")
         .annotate(total=Sum("seller_earning"))
     )
-    return {row["seller_id"]: row["total"] or Decimal("0.00") for row in rows}
+    return {
+        row["seller__photographer_profile__id"]: row["total"] or Decimal("0.00")
+        for row in rows
+    }
 
 
 def _reviews_by_photographer(Review, target: date_cls) -> dict[int, dict]:

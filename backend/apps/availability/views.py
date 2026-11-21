@@ -41,7 +41,7 @@ def _parse_date(raw: str | None, field: str):
     try:
         return datetime.strptime(raw, "%Y-%m-%d").date()
     except ValueError:
-        raise ValidationError({field: "Use the format YYYY-MM-DD."})
+        raise ValidationError({field: "Use the format YYYY-MM-DD."}) from None
 
 
 def _parse_int(raw: str | None, field: str, default: int | None = None):
@@ -50,7 +50,7 @@ def _parse_int(raw: str | None, field: str, default: int | None = None):
     try:
         return int(raw)
     except (TypeError, ValueError):
-        raise ValidationError({field: "Must be a whole number."})
+        raise ValidationError({field: "Must be a whole number."}) from None
 
 
 @extend_schema(tags=["Availability"])

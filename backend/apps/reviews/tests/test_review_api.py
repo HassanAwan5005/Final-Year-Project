@@ -308,6 +308,63 @@ def test_product_reviews_are_publicly_readable(
     assert len(response.json()["data"]) == 1
 
 
+def test_buyer_can_edit_an_old_product_review(buyer_client, paid_order_item):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from apps.reviews.models import ProductReview
+
+    created = buyer_client.post(
+        f"{REVIEWS}products/",
+        {"order_item": paid_order_item.pk, "rating": 2, "comment": "Meh."},
+        format="json",
+    ).json()["data"]
+    ProductReview.objects.filter(pk=created["id"]).update(
+        created_at=timezone.now() - timedelta(days=365)
+    )
+
+    response = buyer_client.patch(
+        f"{REVIEWS}products/{created['id']}/edit/",
+        {"rating": 5, "comment": "Grew on me."},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["rating"] == 5
+    assert response.json()["data"]["comment"] == "Grew on me."
+
+
+def test_another_buyer_cannot_edit_your_product_review(
+    buyer_client, other_buyer_client, paid_order_item
+):
+    created = buyer_client.post(
+        f"{REVIEWS}products/",
+        {"order_item": paid_order_item.pk, "rating": 4},
+        format="json",
+    ).json()["data"]
+
+    response = other_buyer_client.patch(
+        f"{REVIEWS}products/{created['id']}/edit/", {"rating": 1}, format="json"
+    )
+
+    assert response.status_code == 404
+
+
+def test_buyer_can_delete_their_product_review(buyer_client, paid_order_item):
+    created = buyer_client.post(
+        f"{REVIEWS}products/",
+        {"order_item": paid_order_item.pk, "rating": 4},
+        format="json",
+    ).json()["data"]
+
+    response = buyer_client.delete(f"{REVIEWS}products/{created['id']}/remove/")
+
+    assert response.status_code == 204
+    mine = buyer_client.get(f"{REVIEWS}products/mine/").json()["data"]
+    assert all(row["id"] != created["id"] for row in mine)
+
+
 def test_someone_elses_purchase_cannot_be_reviewed(other_buyer_client, paid_order_item):
     response = other_buyer_client.post(
         f"{REVIEWS}products/",

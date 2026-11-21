@@ -94,6 +94,86 @@ export const photographersApi = {
       sort_options: { value: string; label: string }[];
     }>(api.get(`${ENDPOINTS.photographers.list}filters/`));
   },
+
+  /**
+   * Image-to-Photographer Search ("Find Similar Style").
+   * Uploads reference photo and returns photographers ranked by aesthetic cosine similarity.
+   */
+  async visualSearch(
+    imageUri: string,
+    params: { category?: string; city?: string; min_price?: number; max_price?: number; limit?: number } = {},
+  ): Promise<{
+    items: Recommendation[];
+    referenceStyle: string;
+    totalMatches: number;
+  }> {
+    const formData = new FormData();
+    const filename = imageUri.split('/').pop() || 'reference.jpg';
+    const match = /\.(\w+)$/.exec(filename);
+    const type = match ? `image/${match[1]}` : 'image/jpeg';
+
+    formData.append('image', {
+      uri: imageUri,
+      name: filename,
+      type,
+    } as any);
+
+    if (params.category) formData.append('category', params.category);
+    if (params.city) formData.append('city', params.city);
+    if (params.min_price) formData.append('min_price', String(params.min_price));
+    if (params.max_price) formData.append('max_price', String(params.max_price));
+    if (params.limit) formData.append('limit', String(params.limit));
+
+    const response = await api.post<ApiEnvelope<Recommendation[]> & { meta?: { reference_style?: string; total_matches?: number } }>(
+      ENDPOINTS.photographers.visualSearch,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    );
+
+    return {
+      items: response.data.data,
+      referenceStyle: response.data.meta?.reference_style || 'General',
+      totalMatches: response.data.meta?.total_matches || response.data.data.length,
+    };
+  },
+
+  /**
+   * Conversational Shoot Matchmaker:
+   * Parses natural language buyer prompt (e.g. "Looking for a candid photographer in Lahore for a Mehndi event under Rs 40,000 who delivers within a week")
+   * and returns structured filters with ranked tailored recommendations.
+   */
+  async matchmaker(
+    prompt: string,
+    filters?: { city?: string; category?: string; max_price?: number; delivery_days?: number; style?: string },
+    limit = 20,
+  ): Promise<{
+    assistantMessage: string;
+    parsedFilters: Record<string, unknown>;
+    suggestedChips: { key: string; label: string; value: unknown }[];
+    relaxedNotice?: string | null;
+    photographers: Recommendation[];
+    totalMatches: number;
+  }> {
+    const response = await api.post<
+      ApiEnvelope<{
+        assistant_message: string;
+        parsed_filters: Record<string, unknown>;
+        suggested_chips: { key: string; label: string; value: unknown }[];
+        relaxed_notice?: string | null;
+        photographers: Recommendation[];
+      }> & { meta?: { total_matches?: number; confidence?: number } }
+    >(ENDPOINTS.photographers.matchmaker, { prompt, filters, limit });
+
+    const payload = response.data.data;
+    return {
+      assistantMessage: payload.assistant_message,
+      parsedFilters: payload.parsed_filters,
+      suggestedChips: payload.suggested_chips,
+      relaxedNotice: payload.relaxed_notice,
+      photographers: payload.photographers,
+      totalMatches: response.data.meta?.total_matches ?? payload.photographers.length,
+    };
+  },
 };
 
 export const catalogApi = {
@@ -150,4 +230,5 @@ export const recommendationsApi = {
       .post(`${ENDPOINTS.recommendations}click/`, { photographer_id: photographerId })
       .catch(() => undefined);
   },
+
 };

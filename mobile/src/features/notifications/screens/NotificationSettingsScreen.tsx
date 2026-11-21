@@ -147,8 +147,8 @@ export function NotificationSettingsScreen({ onBack }: { onBack: () => void }) {
         <View style={styles.callout}>
           <Ionicons name="information-circle-outline" size={16} color={colors.blue} />
           <Text style={styles.calloutText}>
-            A cancelled booking, a wallet credit or a decision about your account always
-            reaches you, whatever is set here.
+            A cancelled booking or a decision about your account always reaches you,
+            whatever is set here.
           </Text>
         </View>
       </ScrollView>

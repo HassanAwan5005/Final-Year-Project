@@ -33,7 +33,9 @@ class ReviewQuerySet(models.QuerySet):
         return self.visible().filter(photographer_id=photographer_id)
 
     def with_details(self):
-        return self.select_related("buyer", "photographer", "booking").prefetch_related(
+        return self.select_related(
+            "buyer", "photographer", "booking", "booking__service"
+        ).prefetch_related(
             "images", "reply"
         )
 

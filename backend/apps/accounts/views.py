@@ -6,7 +6,6 @@ services, return. Any view growing past ~15 lines of logic means something
 belongs in services.py instead.
 """
 
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
@@ -45,7 +44,7 @@ User = get_user_model()
 class RegisterView(GenericAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
-    throttle_classes = []
+    throttle_scope = "register"
 
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -79,7 +78,7 @@ class RegisterView(GenericAPIView):
 class LoginView(TokenObtainPairView):
     serializer_class = SnapSphereTokenObtainPairSerializer
     permission_classes = [AllowAny]
-    throttle_classes = []
+    throttle_scope = "login"
 
     def post(self, request, *args, **kwargs):
         email = str(request.data.get("email", "")).lower().strip()
@@ -203,7 +202,7 @@ class VerifyEmailView(GenericAPIView):
 class ResendOTPView(GenericAPIView):
     serializer_class = ResendOTPSerializer
     permission_classes = [IsAuthenticated]
-    throttle_classes = []
+    throttle_scope = "otp"
 
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -261,7 +260,7 @@ class ChangePasswordView(GenericAPIView):
 class PasswordResetRequestView(GenericAPIView):
     serializer_class = PasswordResetRequestSerializer
     permission_classes = [AllowAny]
-    throttle_classes = []
+    throttle_scope = "password_reset"
 
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -279,7 +278,7 @@ class PasswordResetRequestView(GenericAPIView):
 class PasswordResetConfirmView(GenericAPIView):
     serializer_class = PasswordResetConfirmSerializer
     permission_classes = [AllowAny]
-    throttle_classes = []
+    throttle_scope = "password_reset"
 
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -309,6 +308,7 @@ class DeviceRegisterView(GenericAPIView):
 class DeleteAccountView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(request=None, responses={204: None})
     def delete(self, request):
         services.delete_account(request.user, reason=request.data.get("reason", ""))
         return Response(status=status.HTTP_204_NO_CONTENT)

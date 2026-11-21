@@ -8,7 +8,6 @@ something you did not buy.
 """
 
 from datetime import timedelta
-from decimal import Decimal
 
 import pytest
 from django.utils import timezone
@@ -22,13 +21,15 @@ from apps.marketplace.services import (
     redeem_download_token,
 )
 
+DELIVERY = {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "03001234567"}
+
 pytestmark = pytest.mark.django_db
 
 
 @pytest.fixture
 def purchase(funded_buyer, product):
     add_to_cart(funded_buyer, product)
-    order = checkout(funded_buyer)
+    order = checkout(funded_buyer, **DELIVERY)
     return order.items.first()
 
 
@@ -56,7 +57,7 @@ def test_asking_a_private_file_for_a_url_raises(product):
     valid in a JSON response and ships.
     """
     with pytest.raises(ValueError, match="no public URL"):
-        product.files.first().file.url
+        product.files.first().file.url  # noqa: B018 — the access itself must raise
 
 
 def test_the_api_never_serialises_a_file_path(buyer_client, product):

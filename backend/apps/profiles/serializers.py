@@ -22,6 +22,7 @@ from apps.catalog.serializers import (
     ServiceSerializer,
     SpecializationSerializer,
 )
+from apps.portfolio.ai import select_diverse_portfolio
 from apps.profiles.models import (
     BuyerProfile,
     PhotographerProfile,
@@ -112,6 +113,9 @@ class PortfolioPreviewSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     caption = serializers.CharField()
     is_featured = serializers.BooleanField()
+    visual_style = serializers.CharField(required=False, default="")
+    shot_type = serializers.CharField(required=False, default="")
+    aesthetic_score = serializers.FloatField(required=False, default=0.0)
     image_url = serializers.SerializerMethodField()
     thumbnail_url = serializers.SerializerMethodField()
 
@@ -144,7 +148,9 @@ class PhotographerDetailSerializer(PhotographerListSerializer):
 
     def get_portfolio(self, obj) -> list:
         images = getattr(obj, "preview_images", [])
-        return PortfolioPreviewSerializer(images, many=True, context=self.context).data
+        # Curate top-9 grid for aesthetic diversity across shot perspectives and visual styles
+        diverse_images = select_diverse_portfolio(images, limit=9)
+        return PortfolioPreviewSerializer(diverse_images, many=True, context=self.context).data
 
     def get_recent_reviews(self, obj) -> list:
         reviews = getattr(obj, "recent_reviews", [])

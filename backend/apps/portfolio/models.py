@@ -60,6 +60,23 @@ class PortfolioAlbum(BaseModel):
         return self.title
 
 
+class VisualStyle(models.TextChoices):
+    CINEMATIC = "CINEMATIC", "Cinematic"
+    MOODY = "MOODY", "Moody"
+    BRIGHT_AIRY = "BRIGHT_AIRY", "Bright & Airy"
+    TRADITIONAL_DESI = "TRADITIONAL_DESI", "Traditional Desi Wedding"
+    STUDIO_PORTRAIT = "STUDIO_PORTRAIT", "Studio Portrait"
+    CANDID_NATURAL = "CANDID_NATURAL", "Candid & Natural"
+
+
+class ShotType(models.TextChoices):
+    PORTRAIT = "PORTRAIT", "Portrait / Close-up"
+    WIDE_DECOR = "WIDE_DECOR", "Wide / Decor & Venue"
+    CANDID_MOMENT = "CANDID_MOMENT", "Candid Moment"
+    DETAIL_MACRO = "DETAIL_MACRO", "Detail & Macro"
+    GROUP_STAGE = "GROUP_STAGE", "Group / Stage"
+
+
 class PortfolioImage(BaseModel):
     photographer = models.ForeignKey(
         "profiles.PhotographerProfile", on_delete=models.CASCADE,
@@ -100,6 +117,20 @@ class PortfolioImage(BaseModel):
 
     view_count = models.PositiveIntegerField(default=0)
     like_count = models.PositiveIntegerField(default=0)
+
+    # ─── AI Aesthetic & Visual Diversity ────────────────────────────────────
+    visual_style = models.CharField(
+        max_length=32, choices=VisualStyle.choices, blank=True, db_index=True
+    )
+    shot_type = models.CharField(
+        max_length=32, choices=ShotType.choices, blank=True, db_index=True
+    )
+    aesthetic_score = models.FloatField(
+        default=0.75, help_text="AI aesthetic & visual clarity score (0.0 - 1.0)"
+    )
+    embedding = models.JSONField(
+        null=True, blank=True, help_text="AI aesthetic feature embedding vector"
+    )
 
     class Meta:
         db_table = "portfolio_images"

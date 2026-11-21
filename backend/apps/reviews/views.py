@@ -55,6 +55,7 @@ from apps.reviews.serializers import (
     PendingReviewsSerializer,
     ProductReviewCreateSerializer,
     ProductReviewSerializer,
+    ProductReviewUpdateSerializer,
     ReviewCreateSerializer,
     ReviewFlagSerializer,
     ReviewReplyWriteSerializer,
@@ -80,6 +81,7 @@ class ReviewViewSet(
         "update_reply": ReviewReplyWriteSerializer,
         "flag": ReviewFlagSerializer,
         "create_product_review": ProductReviewCreateSerializer,
+        "edit_product_review": ProductReviewUpdateSerializer,
     }
     action_permissions = {
         "for_photographer": [AllowAny],
@@ -108,6 +110,7 @@ class ReviewViewSet(
         "flag": "Reported — our team will take a look",
         "helpful": "Thanks for the feedback",
         "create_product_review": "Thanks — your review is live",
+        "edit_product_review": "Review updated",
     }
 
     # ─── Context ─────────────────────────────────────────────────────────────
@@ -263,7 +266,7 @@ class ReviewViewSet(
         )
 
     @extend_schema(
-        summary="Correct your review — 24h, and only before a reply exists",
+        summary="Edit your review",
         request=ReviewUpdateSerializer,
         responses=ReviewSerializer,
     )
@@ -415,6 +418,28 @@ class ReviewViewSet(
         ).data
         return (
             self.get_paginated_response(data) if page is not None else Response(data)
+        )
+
+    @extend_schema(
+        summary="Edit a product review you wrote",
+        request=ProductReviewUpdateSerializer,
+        responses=ProductReviewSerializer,
+    )
+    @action(
+        detail=False, methods=["patch"],
+        url_path=r"products/(?P<review_id>\d+)/edit",
+    )
+    def edit_product_review(self, request, review_id=None):
+        review = ProductReview.objects.filter(
+            pk=int(review_id), buyer=request.user, is_deleted=False
+        ).first()
+        if review is None:
+            raise NotFound("Review not found.")
+        serializer = self.get_serializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        updated = services.update_product_review(review, **serializer.validated_data)
+        return Response(
+            ProductReviewSerializer(updated, context=self.get_serializer_context()).data
         )
 
     @extend_schema(summary="Withdraw a product review", responses={204: None})

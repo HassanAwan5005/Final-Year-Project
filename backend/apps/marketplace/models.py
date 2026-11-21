@@ -43,9 +43,11 @@ class LicenseType(models.TextChoices):
 
 
 class DigitalProduct(UUIDModel, BaseModel):
+    # Any account can sell — buyers as well as photographers — so the seller
+    # is the user, not a photographer profile.
     seller = models.ForeignKey(
-        "profiles.PhotographerProfile", on_delete=models.CASCADE,
-        related_name="products",
+        "accounts.User", on_delete=models.CASCADE,
+        related_name="shop_products",
     )
     category = models.ForeignKey(
         "catalog.Category", null=True, blank=True, on_delete=models.SET_NULL,
@@ -186,7 +188,12 @@ class OrderStatus(models.TextChoices):
 
 
 class Order(UUIDModel, TimeStampedModel):
-    """A basket checkout. One order, many items, one wallet debit."""
+    """
+    A basket checkout. One order, many items, paid by cash on delivery.
+
+    There are no online payments: the buyer pays the seller in cash when the
+    item is delivered. For a COD order `status=PAID` means "order confirmed".
+    """
 
     buyer = models.ForeignKey(
         "accounts.User", on_delete=models.PROTECT, related_name="orders"
@@ -203,8 +210,12 @@ class Order(UUIDModel, TimeStampedModel):
         max_length=16, choices=OrderStatus.choices,
         default=OrderStatus.PENDING, db_index=True,
     )
-    payment_method = models.CharField(max_length=20, default="WALLET")
+    payment_method = models.CharField(max_length=20, default="COD")
     paid_at = models.DateTimeField(null=True, blank=True)
+
+    # ─── Delivery (required at checkout for cash on delivery) ───────────────
+    delivery_address = models.TextField(max_length=500, blank=True)
+    delivery_phone = models.CharField(max_length=20, blank=True)
 
     # Guards against a double-tap on Checkout creating two identical orders.
     idempotency_key = models.CharField(
@@ -251,8 +262,8 @@ class OrderItem(TimeStampedModel):
         DigitalProduct, on_delete=models.PROTECT, related_name="order_items"
     )
     seller = models.ForeignKey(
-        "profiles.PhotographerProfile", on_delete=models.PROTECT,
-        related_name="sales",
+        "accounts.User", on_delete=models.PROTECT,
+        related_name="shop_sales",
     )
 
     product_title = models.CharField(max_length=160)

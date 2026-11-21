@@ -550,7 +550,7 @@ def approve_product(product_id: int, admin_user, *, note: str = "", request=None
     from apps.notifications.services import notify
 
     notify(
-        product.seller.user,
+        product.seller,
         NotificationType.PRODUCT_APPROVED,
         title=f"“{product.title}” is approved",
         body="It is now listed in the shop.",
@@ -575,8 +575,13 @@ def unpublish_product(product_id: int, admin_user, *, reason: str = "", request=
     if product is None:
         raise BusinessRuleViolation("Product not found.")
 
+    # Rejecting a listing that was never approved also unpublishes it, so it
+    # leaves the pending queue instead of waiting there forever.
+    was_pending = not product.is_approved
     product.is_approved = False
-    product.save(update_fields=["is_approved", "updated_at"])
+    if was_pending:
+        product.is_published = False
+    product.save(update_fields=["is_approved", "is_published", "updated_at"])
 
     _audit(
         admin_user,
@@ -593,9 +598,13 @@ def unpublish_product(product_id: int, admin_user, *, reason: str = "", request=
     from apps.notifications.services import notify
 
     notify(
-        product.seller.user,
+        product.seller,
         NotificationType.PRODUCT_REJECTED,
-        title=f"“{product.title}” was removed from the shop",
+        title=(
+            f"“{product.title}” was not approved"
+            if was_pending
+            else f"“{product.title}” was removed from the shop"
+        ),
         body=reason[:400] or "Contact support if you think this is a mistake.",
     )
     return product

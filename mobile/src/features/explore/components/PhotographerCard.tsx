@@ -93,6 +93,40 @@ export const PhotographerCard = memo(function PhotographerCard({
               compact
             />
             <View style={styles.dot} />
+            {photographer.completed_bookings > 0 ? (
+              <>
+                <Text style={styles.meta}>{photographer.completed_bookings}+ shoots</Text>
+                <View style={styles.dot} />
+              </>
+            ) : (
+              <>
+                <Text
+                  style={[
+                    styles.meta,
+                    {
+                      color:
+                        (photographer.years_experience || 0) < 1
+                          ? colors.green
+                          : (photographer.years_experience || 0) <= 3
+                            ? colors.blue
+                            : (photographer.years_experience || 0) <= 6
+                              ? colors.gold
+                              : colors.amber,
+                      fontWeight: '600',
+                    },
+                  ]}
+                >
+                  {(photographer.years_experience || 0) < 1
+                    ? '🌱 New Talent'
+                    : (photographer.years_experience || 0) <= 3
+                      ? '🌿 Growing Pro'
+                      : (photographer.years_experience || 0) <= 6
+                        ? '🎖 Senior Specialist'
+                        : '👑 Master'}
+                </Text>
+                <View style={styles.dot} />
+              </>
+            )}
             <Ionicons name="location-outline" size={12} color={colors.sub} />
             <Text style={styles.meta}>{photographer.city || '—'}</Text>
           </View>

@@ -24,20 +24,17 @@ If (3) were deferred to a Celery task, a profile would show "4.8 from 12
 reviews" above a list of 13. So `create_review` does all four atomically and
 `notify()` (which defers to `on_commit`) is the only thing that happens after.
 
-WHY EDITING IS TIME-BOXED AND REPLY-BOXED
------------------------------------------
-A review can be corrected for `EDIT_WINDOW_HOURS`, and only while the
-photographer has not replied. Once there is a reply, editing the review above
-it would let a buyer rewrite the question a public answer was given to — the
-photographer's words would stay, attached to something they never read.
+EDITING
+-------
+A buyer can edit or delete their own review (photographer or product) at any
+time. If the photographer has replied, the reply stays attached. Only a review
+hidden by moderation is locked.
 """
 
 import logging
-from datetime import timedelta
 
 from django.db import transaction
 from django.db.models import Avg, Count, F
-from django.utils import timezone
 
 from apps.core.exceptions import BusinessRuleViolation, ConflictError
 from apps.reviews.models import (
@@ -49,10 +46,6 @@ from apps.reviews.models import (
 )
 
 logger = logging.getLogger("snapsphere")
-
-#: A typo or a forgotten sentence is worth fixing; a review rewritten a month
-#: later is a different review, posted under an old date.
-EDIT_WINDOW_HOURS = 24
 
 #: Photos are the strongest trust signal on a profile, but each one is three
 #: renditions on disk and a row in the detail payload.
@@ -149,7 +142,7 @@ def _create_review_locked(booking, buyer, *, rating, title, comment, images, sub
 
 @transaction.atomic
 def update_review(review: Review, **data) -> Review:
-    """Correct a review inside the edit window, before any reply exists."""
+    """The author may correct their review at any time."""
     _assert_editable(review)
 
     images = data.pop("images", None)
@@ -211,15 +204,14 @@ def _assert_eligible(booking, buyer) -> None:
 
 
 def _assert_editable(review: Review) -> None:
-    if hasattr(review, "reply"):
+    """
+    A buyer may edit their photographer review at any time, even after the
+    photographer has replied (the reply stays). Ownership is checked by the
+    view; only a hidden (moderated) review is locked.
+    """
+    if review.is_hidden:
         raise BusinessRuleViolation(
-            "This review has a public reply, so it can no longer be edited. "
-            "Contact support if it needs correcting."
-        )
-    deadline = review.created_at + timedelta(hours=EDIT_WINDOW_HOURS)
-    if timezone.now() > deadline:
-        raise BusinessRuleViolation(
-            f"Reviews can be edited for {EDIT_WINDOW_HOURS} hours after posting."
+            "This review was hidden by moderation and can no longer be edited."
         )
 
 
@@ -427,10 +419,10 @@ def _create_product_review_locked(order_item, buyer, *, rating, title, comment):
 
 @transaction.atomic
 def update_product_review(review: ProductReview, **data) -> ProductReview:
-    deadline = review.created_at + timedelta(hours=EDIT_WINDOW_HOURS)
-    if timezone.now() > deadline:
+    """The buyer may edit their product review at any time, unless hidden."""
+    if review.is_hidden:
         raise BusinessRuleViolation(
-            f"Reviews can be edited for {EDIT_WINDOW_HOURS} hours after posting."
+            "This review was hidden by moderation and can no longer be edited."
         )
     for field, value in data.items():
         setattr(review, field, (value or "").strip() if field in ("title", "comment") else value)
@@ -531,7 +523,7 @@ def _notify_seller(review: ProductReview, confidence=None) -> None:
     from apps.notifications.services import notify
 
     notify(
-        review.product.seller.user,
+        review.product.seller,
         NotificationType.REVIEW_RECEIVED,
         title=f"{review.rating}★ on {review.product.title}",
         body=(review.comment[:140] or review.title or "No comment left."),

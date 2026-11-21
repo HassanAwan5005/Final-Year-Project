@@ -63,6 +63,7 @@ class DayAvailability:
     reason: str = ""
     message: str = ""
     booked_times: list[str] = field(default_factory=list)
+    booked_intervals: list[tuple[time, int]] = field(default_factory=list)
     remaining_slots: int = 0
     start_time: time | None = None
     end_time: time | None = None
@@ -140,7 +141,7 @@ def suggested_start_times(
 
     Derived from the weekday rule's working hours, trimmed so the shoot
     finishes before the photographer's day ends, with already-taken starts
-    removed. Returns [] when the date is not bookable at all.
+    and overlapping time intervals removed. Returns [] when the date is not bookable at all.
     """
     day = day_availability(photographer, date)
     if not day.is_available or day.start_time is None or day.end_time is None:
@@ -150,14 +151,29 @@ def suggested_start_times(
     if explicit is not None:
         return explicit
 
-    taken = set(day.booked_times)
-    latest = _shift_hours(day.end_time, -max(duration_hours, 1))
+    candidate_duration = max(duration_hours, 1)
+    latest = _shift_hours(day.end_time, -candidate_duration)
+
+    ref_date = date_cls(2000, 1, 1)
+    booked_spans = []
+    for b_start, b_duration in day.booked_intervals:
+        b_dt_start = datetime.combine(ref_date, b_start)
+        b_dt_end = b_dt_start + timedelta(hours=max(b_duration, 1))
+        booked_spans.append((b_dt_start, b_dt_end))
 
     times, cursor = [], day.start_time
     while cursor <= latest:
-        label = cursor.strftime("%H:%M")
-        if label not in taken:
-            times.append(label)
+        c_dt_start = datetime.combine(ref_date, cursor)
+        c_dt_end = c_dt_start + timedelta(hours=candidate_duration)
+
+        has_clash = any(
+            c_dt_start < b_end and c_dt_end > b_start
+            for b_start, b_end in booked_spans
+        )
+
+        if not has_clash:
+            times.append(cursor.strftime("%H:%M"))
+
         nxt = _shift_hours(cursor, 1)
         if nxt <= cursor:  # wrapped past midnight
             break
@@ -167,7 +183,8 @@ def suggested_start_times(
 
 def booked_times_on(photographer, date: date_cls) -> list[str]:
     """Start times already occupied by a PENDING or ACCEPTED booking."""
-    return _blocking_bookings_in(photographer, date, date).get(date, [])
+    rows = _blocking_bookings_in(photographer, date, date).get(date, [])
+    return [b[0].strftime("%H:%M") for b in rows]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -191,8 +208,8 @@ def _blackouts_in(photographer, start: date_cls, end: date_cls) -> list[Blackout
 
 def _blocking_bookings_in(
     photographer, start: date_cls, end: date_cls
-) -> dict[date_cls, list[str]]:
-    """{event_date: ["10:00", "15:00"]} for bookings that occupy a slot."""
+) -> dict[date_cls, list[tuple[time, int]]]:
+    """{event_date: [(start_time, duration_hours), ...]} for bookings that occupy a slot."""
     from apps.bookings.constants import BLOCKING_STATUSES
     from apps.bookings.models import Booking
 
@@ -201,11 +218,11 @@ def _blocking_bookings_in(
         event_date__gte=start,
         event_date__lte=end,
         status__in=BLOCKING_STATUSES,
-    ).values_list("event_date", "start_time")
+    ).values_list("event_date", "start_time", "duration_hours")
 
-    grouped: dict[date_cls, list[str]] = {}
-    for event_date, start_time in rows:
-        grouped.setdefault(event_date, []).append(start_time.strftime("%H:%M"))
+    grouped: dict[date_cls, list[tuple[time, int]]] = {}
+    for event_date, start_time, duration in rows:
+        grouped.setdefault(event_date, []).append((start_time, int(duration or 4)))
     return grouped
 
 
@@ -232,7 +249,7 @@ def _day_status(
     *,
     rule: AvailabilityRule | None,
     blackouts: list[BlackoutDate],
-    booked: list[str],
+    booked: list[tuple[time, int]],
     floor: date_cls,
     accepting: bool,
 ) -> DayAvailability:
@@ -246,6 +263,7 @@ def _day_status(
     hours = (rule.start_time, rule.end_time) if rule else (time(9, 0), time(18, 0))
     capacity = rule.max_bookings if rule else 1
     remaining = max(capacity - len(booked), 0)
+    booked_start_times = [b[0].strftime("%H:%M") for b in booked]
 
     def unavailable(reason: str, message: str) -> DayAvailability:
         return DayAvailability(
@@ -253,7 +271,8 @@ def _day_status(
             is_available=False,
             reason=reason,
             message=message,
-            booked_times=sorted(booked),
+            booked_times=sorted(booked_start_times),
+            booked_intervals=list(booked),
             remaining_slots=0,
             start_time=hours[0],
             end_time=hours[1],
@@ -288,7 +307,8 @@ def _day_status(
     return DayAvailability(
         date=date,
         is_available=True,
-        booked_times=sorted(booked),
+        booked_times=sorted(booked_start_times),
+        booked_intervals=list(booked),
         remaining_slots=remaining,
         start_time=hours[0],
         end_time=hours[1],

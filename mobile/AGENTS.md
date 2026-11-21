@@ -1,28 +1,30 @@
-# Expo SDK 54
+# Expo SDK 58
 
-This project is pinned to **Expo SDK 54** (`expo@~54.0.36`, React Native 0.81,
-React 19.1).
+This project is on **Expo SDK 58** (`expo@^58.0.0`, React Native 0.88,
+React 19.3).
 
-Read the exact versioned docs at https://docs.expo.dev/versions/v54.0.0/
-before writing any code. Do NOT follow SDK 55/56/57 documentation — APIs,
-config-plugin availability and package versions differ between SDKs.
+Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/
+before writing any code. Do NOT follow documentation for other SDK versions —
+APIs, config-plugin availability and package versions differ between SDKs.
 
-## Why SDK 54 and not the latest
+## Running on a phone
 
-Expo Go supports exactly one SDK version at a time, and the build available on
-the Play Store for this project's target devices is the SDK 54 client.
-Scaffolding on SDK 57 produced:
+Expo Go supports exactly one SDK version at a time. The test device must have
+the **SDK 58** build of Expo Go; an older one fails with:
 
     ERROR  Project is incompatible with this version of Expo Go
 
-Do not run `npx expo install expo@latest` or `--fix` against a newer SDK
-without first confirming the Expo Go build on the test device supports it.
+Do not change the SDK (`npx expo install expo@<version>`) without first
+confirming the Expo Go build on the test devices supports it.
 
-## SDK 54 gotchas already handled here
+The app finds the backend automatically from the address Expo serves the
+bundle from. Set `EXPO_PUBLIC_API_URL` in `mobile/.env` only for a tunnel or a
+backend on another machine — when set, it always wins.
 
-* `expo-image` ships **no config plugin** in SDK 54 — it must not appear in
-  `app.json` → `plugins`. (It does in later SDKs, which is why the scaffold
-  added it.)
+## SDK 58 notes already handled here
+
+* `expo-image` and `expo-status-bar` ship config plugins in SDK 58, so both
+  are listed in `app.json` → `plugins`.
 * `react-native-reanimated@4` requires `react-native-worklets` as a direct
   dependency **and** `react-native-worklets/plugin` as the last entry in
   `babel.config.js`.

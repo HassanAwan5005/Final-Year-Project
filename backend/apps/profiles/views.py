@@ -1,10 +1,11 @@
 """Photographer discovery, plus the caller's own profile and wallet."""
 
+from django.db.models import Value
+from django.db.models.functions import Coalesce, Lower, NullIf
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status as http
 from rest_framework.decorators import action
-from rest_framework.exceptions import NotFound
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -41,6 +42,9 @@ class PhotographerViewSet(
     """
 
     permission_classes = [AllowAny]
+    # Numeric ids only, so /photographers/<anything-else>/ is a clean 404
+    # instead of reaching the ORM and failing with a 500.
+    lookup_value_regex = r"\d+"
     serializer_class = PhotographerListSerializer
     serializer_classes = {
         "retrieve": PhotographerDetailSerializer,
@@ -58,8 +62,17 @@ class PhotographerViewSet(
     }
 
     def get_queryset(self):
-        return selectors.photographers_for_list().order_by(
-            "-avg_rating", "-reviews_count", "-completed_bookings", "-created_at"
+        # `sort_name` mirrors PhotographerProfile.display_name (business name,
+        # else the person's full name), lower-cased so ?ordering=name sorts
+        # A–Z regardless of capitalisation.
+        return (
+            selectors.photographers_for_list()
+            .annotate(
+                sort_name=Lower(
+                    Coalesce(NullIf("business_name", Value("")), "user__full_name")
+                )
+            )
+            .order_by("-avg_rating", "-reviews_count", "-completed_bookings", "-created_at")
         )
 
     def get_serializer_context(self):
@@ -97,7 +110,7 @@ class PhotographerViewSet(
             OpenApiParameter("radius_km", float, description="Requires lat and lng"),
             OpenApiParameter(
                 "ordering", str,
-                description="rating | price | experience | popularity | reviews | newest "
+                description="name | rating | price | experience | popularity | reviews | newest "
                             "(prefix with '-' to reverse)",
             ),
         ]

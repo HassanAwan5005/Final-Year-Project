@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import type { PhotographerFilters } from '../../../api/services/photographers.api';
+import { type PhotographerFilters } from '../../../api/services/photographers.api';
 import { EmptyState, ErrorState, LoadingState } from '../../../components/feedback/States';
 import { useDebounce } from '../../../hooks/useDebounce';
 import type { PhotographerSummary } from '../../../types/models';
@@ -42,6 +42,9 @@ export function ExploreScreen({ onOpenPhotographer, initialCategory }: Props) {
       ...filters,
       q: debouncedSearch || undefined,
       category,
+      // Explore lists everyone A–Z unless the buyer picks another sort in
+      // the filter sheet. AI-ranked discovery lives on the Home screen.
+      ordering: filters.ordering ?? 'name',
       page_size: 20,
     }),
     [filters, debouncedSearch, category],
@@ -91,7 +94,7 @@ export function ExploreScreen({ onOpenPhotographer, initialCategory }: Props) {
           <TextInput
             value={search}
             onChangeText={setSearch}
-            placeholder="Search photographers, cities…"
+            placeholder="Search photographers by name or city..."
             placeholderTextColor={colors.dim}
             style={styles.searchInput}
             autoCapitalize="none"
@@ -104,6 +107,7 @@ export function ExploreScreen({ onOpenPhotographer, initialCategory }: Props) {
               <Ionicons name="close-circle" size={17} color={colors.dim} />
             </Pressable>
           ) : null}
+
         </View>
 
         <Pressable
@@ -144,49 +148,47 @@ export function ExploreScreen({ onOpenPhotographer, initialCategory }: Props) {
       />
 
       {/* ─── Result count ───────────────────────────────────────────────── */}
-      {!query.isLoading ? (
-        <Text style={styles.resultCount}>
-          {total} photographer{total === 1 ? '' : 's'}
-          {debouncedSearch ? ` matching "${debouncedSearch}"` : ''}
-        </Text>
-      ) : null}
+      <>
+          {!query.isLoading ? (
+            <Text style={styles.resultCount}>
+              {total} photographer{total === 1 ? '' : 's'}
+              {debouncedSearch ? ` matching "${debouncedSearch}"` : ''}
+            </Text>
+          ) : null}
 
-      {/* ─── Results ────────────────────────────────────────────────────── */}
-      {query.isLoading ? (
-        <LoadingState label="Searching…" />
-      ) : query.isError ? (
-        <ErrorState
-          message={(query.error as Error)?.message}
-          onRetry={() => query.refetch()}
-        />
-      ) : items.length === 0 ? (
-        <EmptyState
-          title="No photographers found"
-          detail="Try widening your budget, choosing another city, or clearing some filters."
-          actionLabel={activeFilterCount > 0 ? 'Clear filters' : undefined}
-          onAction={activeFilterCount > 0 ? () => setFilters({}) : undefined}
-        />
-      ) : (
-        <FlatList
-          data={items}
-          keyExtractor={(item) => String(item.id)}
-          renderItem={renderItem}
-          contentContainerStyle={styles.list}
-          showsVerticalScrollIndicator={false}
-          onEndReached={loadMore}
-          // 0.5 rather than 0.1: on a slow connection the next page needs to
-          // start loading well before the user hits the bottom, or they see
-          // a stall.
-          onEndReachedThreshold={0.5}
-          ListFooterComponent={
-            query.isFetchingNextPage ? (
-              <ActivityIndicator color={colors.gold} style={styles.footer} />
-            ) : items.length > 0 && !query.hasNextPage ? (
-              <Text style={styles.endOfList}>That's everyone matching your search</Text>
-            ) : null
-          }
-        />
-      )}
+          {query.isLoading ? (
+            <LoadingState label="Searching…" />
+          ) : query.isError ? (
+            <ErrorState
+              message={(query.error as Error)?.message}
+              onRetry={() => query.refetch()}
+            />
+          ) : items.length === 0 ? (
+            <EmptyState
+              title="No photographers found"
+              detail="Try widening your budget, choosing another city, or clearing some filters."
+              actionLabel={activeFilterCount > 0 ? 'Clear filters' : undefined}
+              onAction={activeFilterCount > 0 ? () => setFilters({}) : undefined}
+            />
+          ) : (
+            <FlatList
+              data={items}
+              keyExtractor={(item) => String(item.id)}
+              renderItem={renderItem}
+              contentContainerStyle={styles.list}
+              showsVerticalScrollIndicator={false}
+              onEndReached={loadMore}
+              onEndReachedThreshold={0.5}
+              ListFooterComponent={
+                query.isFetchingNextPage ? (
+                  <ActivityIndicator color={colors.gold} style={styles.footer} />
+                ) : items.length > 0 && !query.hasNextPage ? (
+                  <Text style={styles.endOfList}>That's everyone matching your search</Text>
+                ) : undefined
+              }
+            />
+          )}
+      </>
 
       <FilterSheet
         visible={sheetOpen}

@@ -141,6 +141,9 @@ api.interceptors.response.use(
 
     // Network failure — no response at all.
     if (!error.response) {
+      console.warn(
+        `[API Client] Connection failed: ${error.message} | URL: ${error.config?.baseURL}${error.config?.url}`,
+      );
       throw new ApiError(
         'No internet connection. Please check your network and try again.',
         'NETWORK_ERROR',

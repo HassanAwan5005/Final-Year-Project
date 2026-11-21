@@ -8,9 +8,7 @@ checking afterwards would briefly join the attacker to the Redis group, and
 any message broadcast in that window would reach them. Reject first, always.
 """
 
-import json
 import logging
-from datetime import timedelta
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -123,9 +121,10 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             {"type": "read.receipt", "user_id": self.user.id, "up_to": up_to},
         )
 
-    # ─── Group event fan-out (names map to the "type" keys above) ────────────
     async def chat_message(self, event):
-        await self.send_json({"type": "message", **event["message"]})
+        message = dict(event["message"])
+        message["is_mine"] = (event["message"].get("sender_id") == self.user.id)
+        await self.send_json({"type": "message", **message})
 
     async def typing_event(self, event):
         if event["user_id"] != self.user.id:  # don't echo your own typing
@@ -146,6 +145,17 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 {"type": "presence", "user_id": event["user_id"],
                  "is_online": event["is_online"]}
             )
+            # When someone joins, let them know we are also online in this thread
+            if event.get("is_online") and not event.get("is_reply"):
+                await self.channel_layer.group_send(
+                    self.group_name,
+                    {
+                        "type": "presence.event",
+                        "user_id": self.user.id,
+                        "is_online": True,
+                        "is_reply": True,
+                    },
+                )
 
     async def _broadcast_presence(self, is_online: bool):
         await self.channel_layer.group_send(

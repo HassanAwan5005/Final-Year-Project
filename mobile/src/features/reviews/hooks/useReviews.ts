@@ -57,11 +57,12 @@ export function useProductReviews(productId: number | string | null) {
 // ═══════════════════════════════════════════════════════════════════════════
 // BUYER
 // ═══════════════════════════════════════════════════════════════════════════
-export function usePendingReviews() {
+export function usePendingReviews(enabled = true) {
   return useQuery({
     queryKey: qk.reviews.pending,
     queryFn: () => reviewsApi.pending(),
     staleTime: 60_000,
+    enabled,
   });
 }
 
@@ -109,6 +110,39 @@ export function useDeleteReview() {
   const invalidate = useReviewInvalidation();
   return useMutation({
     mutationFn: (id: number) => reviewsApi.remove(id),
+    onSuccess: invalidate,
+    retry: false,
+  });
+}
+
+export function useMyProductReviews() {
+  return useQuery({
+    queryKey: qk.reviews.myProducts,
+    queryFn: () => reviewsApi.myProductReviews(),
+  });
+}
+
+export function useUpdateProductReview() {
+  const invalidate = useReviewInvalidation();
+  return useMutation({
+    mutationFn: ({
+      id,
+      ...payload
+    }: {
+      id: number;
+      rating?: number;
+      title?: string;
+      comment?: string;
+    }) => reviewsApi.updateProductReview(id, payload),
+    onSuccess: invalidate,
+    retry: false,
+  });
+}
+
+export function useDeleteProductReview() {
+  const invalidate = useReviewInvalidation();
+  return useMutation({
+    mutationFn: (id: number) => reviewsApi.removeProductReview(id),
     onSuccess: invalidate,
     retry: false,
   });

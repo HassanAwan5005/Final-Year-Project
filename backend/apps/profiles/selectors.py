@@ -79,7 +79,7 @@ def photographer_detail(photographer_id: int) -> PhotographerProfile | None:
                 "portfolio_images",
                 queryset=PortfolioImage.objects.filter(is_deleted=False).order_by(
                     "-is_featured", "display_order", "-created_at"
-                )[:12],
+                )[:18],
                 to_attr="preview_images",
             ),
             Prefetch(
@@ -168,14 +168,156 @@ def featured_photographers(limit: int = 10) -> QuerySet[PhotographerProfile]:
     )[:limit]
 
 
+# ─── Trending ────────────────────────────────────────────────────────────────
+#
+# "Trending" means popular RIGHT NOW, not best-rated of all time. A photographer
+# trends when buyers have recently been viewing, saving, messaging, booking and
+# reviewing them. Activity is counted only inside a short window, and older
+# activity inside that window counts less (exponential time decay), so the
+# list moves as buyer attention moves.
+
+TRENDING_WINDOW_DAYS = 14
+TRENDING_HALF_LIFE_DAYS = 3.5
+TRENDING_CACHE_KEY = "trending:scores:v1"
+TRENDING_CACHE_TTL_SECONDS = 2 * 60 * 60  # refreshed hourly by Celery; 2h survives one missed run
+
+#: How strongly each recent signal counts towards trending.
+TRENDING_WEIGHTS = {
+    "VIEW": 1.0,          # profile opened
+    "PORTFOLIO": 3.0,     # portfolio interaction
+    "INQUIRY": 5.0,       # buyer messaged the photographer
+    "WISHLIST": 6.0,      # saved to wishlist
+    "REC_CLICK": 2.0,     # recommendation card tapped
+    "BOOKING": 8.0,       # booking request created
+    "COMPLETED": 10.0,    # booking completed
+    "REVIEW": 4.0,        # new review, scaled by stars (5★ = full weight)
+}
+
+
+def _trending_decay(occurred_at, now) -> float:
+    """1.0 for activity happening now, 0.5 after one half-life, and so on."""
+    age_days = max((now - occurred_at).total_seconds(), 0.0) / 86400.0
+    return 0.5 ** (age_days / TRENDING_HALF_LIFE_DAYS)
+
+
+def compute_trending_scores() -> dict[int, float]:
+    """
+    Trending score per photographer from the last TRENDING_WINDOW_DAYS days.
+
+    score = Σ (signal weight × time decay) over every recent event.
+
+    Sources (each event counted once):
+      · BuyerInteraction — views, portfolio interactions, inquiries, wishlist
+      · RecommendationEvent — recommendation clicks
+      · Booking — requests created, and bookings completed, in the window
+      · Review — new visible reviews, weighted by star rating
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from apps.bookings.constants import BookingStatus
+    from apps.bookings.models import Booking
+    from apps.recommendations.models import BuyerInteraction, RecommendationEvent
+    from apps.reviews.models import Review
+
+    now = timezone.now()
+    since = now - timedelta(days=TRENDING_WINDOW_DAYS)
+    scores: dict[int, float] = {}
+
+    def add(photographer_id, weight, occurred_at):
+        if photographer_id is None or occurred_at is None:
+            return
+        scores[photographer_id] = (
+            scores.get(photographer_id, 0.0) + weight * _trending_decay(occurred_at, now)
+        )
+
+    # Bookings come from the Booking table below, so their interaction rows are
+    # skipped here to avoid counting the same booking twice.
+    for pid, itype, at in BuyerInteraction.objects.filter(
+        created_at__gte=since,
+        interaction_type__in=["VIEW", "PORTFOLIO", "INQUIRY", "WISHLIST"],
+    ).values_list("photographer_id", "interaction_type", "created_at"):
+        add(pid, TRENDING_WEIGHTS[itype], at)
+
+    for pid, at in RecommendationEvent.objects.filter(
+        was_clicked=True, clicked_at__gte=since
+    ).values_list("photographer_id", "clicked_at"):
+        add(pid, TRENDING_WEIGHTS["REC_CLICK"], at)
+
+    for pid, at in Booking.objects.filter(created_at__gte=since).exclude(
+        status__in=[BookingStatus.REJECTED, BookingStatus.CANCELLED, BookingStatus.EXPIRED]
+    ).values_list("photographer_id", "created_at"):
+        add(pid, TRENDING_WEIGHTS["BOOKING"], at)
+
+    for pid, at in Booking.objects.filter(
+        status=BookingStatus.COMPLETED, completed_at__gte=since
+    ).values_list("photographer_id", "completed_at"):
+        add(pid, TRENDING_WEIGHTS["COMPLETED"], at)
+
+    for pid, rating, at in Review.objects.visible().filter(
+        created_at__gte=since
+    ).values_list("photographer_id", "rating", "created_at"):
+        add(pid, TRENDING_WEIGHTS["REVIEW"] * (rating / 5.0), at)
+
+    return scores
+
+
+def refresh_trending_cache() -> dict[int, float]:
+    """Recompute trending scores and store them (called hourly by Celery)."""
+    from django.core.cache import cache
+
+    scores = compute_trending_scores()
+    try:
+        cache.set(TRENDING_CACHE_KEY, scores, TRENDING_CACHE_TTL_SECONDS)
+    except Exception:  # noqa: BLE001 — cache down must not break the feed
+        pass
+    return scores
+
+
+def _get_trending_scores() -> dict[int, float]:
+    """Cached scores, or a live recompute if the cache is empty or unreachable."""
+    from django.core.cache import cache
+
+    try:
+        scores = cache.get(TRENDING_CACHE_KEY)
+    except Exception:  # noqa: BLE001
+        scores = None
+    if scores is None:
+        scores = refresh_trending_cache()
+    return scores
+
+
 def trending_photographers(city: str | None = None, limit: int = 10):
     """
-    "Trending near you".
+    "Trending near you": photographers with the most recent buyer activity.
+
+    Ranked by the time-decayed trending score (see compute_trending_scores).
+    If fewer than `limit` photographers had any recent activity, the remaining
+    slots are filled with the best-rated photographers so the section is never
+    empty during quiet periods.
     """
     qs = photographers_for_list().filter(is_accepting_bookings=True)
     if city:
         qs = qs.filter(user__city__iexact=city)
-    return qs.order_by("-avg_rating", "-completed_bookings", "-reviews_count")[:limit]
+
+    scores = _get_trending_scores()
+    active_ids = [pid for pid, score in scores.items() if score > 0]
+
+    trending = list(qs.filter(pk__in=active_ids)) if active_ids else []
+    trending.sort(
+        key=lambda p: (scores.get(p.pk, 0.0), float(p.avg_rating or 0)), reverse=True
+    )
+    trending = trending[:limit]
+
+    if len(trending) < limit:
+        chosen = [p.pk for p in trending]
+        trending += list(
+            qs.exclude(pk__in=chosen).order_by(
+                "-avg_rating", "-completed_bookings", "-reviews_count"
+            )[: limit - len(trending)]
+        )
+    return trending
 
 
 def photographers_by_category(slug: str, limit: int | None = None):

@@ -9,6 +9,8 @@ ask about. An audit row with an empty reason answers "who and when" and leaves
 "why" to somebody's memory.
 """
 
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.administration.models import (
@@ -284,9 +286,28 @@ class AdminProductSerializer(serializers.Serializer):
     is_approved = serializers.BooleanField()
     file_count = serializers.IntegerField()
     created_at = serializers.DateTimeField()
+    # What a moderator needs to judge a listing: its photos and description.
+    description = serializers.CharField()
+    type_label = serializers.CharField(source="get_product_type_display")
+    thumbnail_url = serializers.SerializerMethodField()
+    preview_image_urls = serializers.SerializerMethodField()
 
     def get_seller_name(self, obj) -> str:
-        return obj.seller.display_name
+        from apps.marketplace.serializers import seller_display_name
+
+        return seller_display_name(obj.seller)
+
+    def get_thumbnail_url(self, obj) -> str | None:
+        if not obj.thumbnail:
+            return None
+        request = self.context.get("request")
+        url = obj.thumbnail.url
+        return request.build_absolute_uri(url) if request else url
+
+    def get_preview_image_urls(self, obj) -> list[str]:
+        from apps.marketplace.serializers import ProductDetailSerializer
+
+        return ProductDetailSerializer(context=self.context).get_preview_image_urls(obj)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -336,6 +357,7 @@ class PlatformSettingSerializer(serializers.ModelSerializer):
         )
         read_only_fields = fields
 
+    @extend_schema_field(OpenApiTypes.ANY)  # bool, int, float, str or JSON
     def get_typed_value(self, obj):
         return obj.typed_value
 

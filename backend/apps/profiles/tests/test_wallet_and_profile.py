@@ -15,7 +15,6 @@ import pytest
 
 from apps.core.exceptions import BusinessRuleViolation, InsufficientBalance
 from apps.profiles.models import (
-    TopUpRequest,
     TopUpStatus,
     Wallet,
     WalletTransaction,

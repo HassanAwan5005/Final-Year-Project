@@ -141,7 +141,7 @@ def test_delete_over_http_reports_why_it_is_refused(
 def test_the_service_cap(photographer, category, settings):
     from apps.catalog import services as catalog_services
 
-    settings.__dict__  # touch, keeps the fixture honest about intent
+    settings.__dict__  # noqa: B018 — touch, keeps the fixture honest about intent
     for index in range(catalog_services.MAX_SERVICES_PER_PHOTOGRAPHER):
         create_service(
             photographer,

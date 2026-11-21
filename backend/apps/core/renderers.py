@@ -38,6 +38,8 @@ class EnvelopeJSONRenderer(JSONRenderer):
         if isinstance(data, dict) and set(data.keys()) >= {"data", "meta"}:
             payload = data["data"]
             meta = {**data["meta"], **meta}
+            # A view returning message + data + meta keeps its own message.
+            message = data.get("message", message)
         elif isinstance(data, dict) and "message" in data and "data" in data:
             message = data["message"]
             payload = data["data"]

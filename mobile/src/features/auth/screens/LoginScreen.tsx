@@ -114,7 +114,7 @@ export function LoginScreen({ onGoRegister, onGoForgot }: Props) {
             isPassword
             autoComplete="current-password"
             textContentType="password"
-            onSubmitEditing={handleSubmit(onSubmit)}
+            onSubmitEditing={() => { void handleSubmit(onSubmit)(); }}
             returnKeyType="go"
           />
         )}

@@ -17,17 +17,26 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
-/** Set this to your machine's LAN IP to test on a real phone. */
-const DEV_LAN_IP = '192.168.18.134';
+/**
+ * Optional: your machine's LAN IP (e.g. '192.168.1.20'), used only when Expo
+ * cannot report the host itself. Prefer EXPO_PUBLIC_API_URL in mobile/.env.
+ */
+const DEV_LAN_IP = '';
 
 const PORT = 8000;
 
 function resolveBaseUrl(): string {
-  // 1. Explicit override always wins.
+  // 1. Explicit override always wins — needed for tunnels and for a backend
+  //    that is not on the machine serving the bundle.
   const fromEnv = process.env.EXPO_PUBLIC_API_URL;
   if (fromEnv) return fromEnv;
 
-  // 2. Expo tells us the host it served the bundle from — that is the dev
+  // 2. On web the browser runs on the dev machine itself.
+  if (Platform.OS === 'web') {
+    return `http://127.0.0.1:${PORT}/api/v1`;
+  }
+
+  // 3. Expo tells us the host it served the bundle from — that is the dev
   //    machine, so it is almost always the right answer on a real device.
   const hostUri =
     Constants.expoConfig?.hostUri ?? Constants.expoGoConfig?.debuggerHost;
@@ -38,10 +47,10 @@ function resolveBaseUrl(): string {
     }
   }
 
-  // 3. Platform fallbacks.
-  if (Platform.OS === 'android') return `http://10.0.2.2:${PORT}/api/v1`;
-  if (Platform.OS === 'ios') return `http://127.0.0.1:${PORT}/api/v1`;
-  return `http://${DEV_LAN_IP}:${PORT}/api/v1`;
+  // 4. Fallbacks.
+  if (DEV_LAN_IP) return `http://${DEV_LAN_IP}:${PORT}/api/v1`;
+  if (Platform.OS === 'android') return `http://10.0.2.2:${PORT}/api/v1`; // emulator → host
+  return `http://127.0.0.1:${PORT}/api/v1`;
 }
 
 export const API_BASE_URL = resolveBaseUrl();
@@ -105,8 +114,10 @@ export const ENDPOINTS = {
   photographers: {
     list: '/profiles/photographers/',
     detail: (id: number | string) => `/profiles/photographers/${id}/`,
-    portfolio: (id: number | string) => `/portfolio/${id}/images/`,
+    portfolio: (id: number | string) => `/portfolio/photographers/${id}/images/`,
     reviews: (id: number | string) => `/reviews/photographers/${id}/`,
+    visualSearch: '/recommendations/visual-search/',
+    matchmaker: '/recommendations/matchmaker/',
   },
   availability: {
     /** Whole window: which dates are bookable and why not, if not. */
@@ -170,6 +181,7 @@ export const ENDPOINTS = {
     createProductReview: '/reviews/products/',
     myProductReviews: '/reviews/products/mine/',
     removeProductReview: (id: number | string) => `/reviews/products/${id}/remove/`,
+    editProductReview: (id: number | string) => `/reviews/products/${id}/edit/`,
   },
   wishlist: {
     list: '/wishlist/',
@@ -191,6 +203,7 @@ export const ENDPOINTS = {
     contacts: '/chat/conversations/contacts/',
     message: (id: number | string) => `/chat/messages/${id}/`,
     reportMessage: (id: number | string) => `/chat/messages/${id}/report/`,
+    smartReplies: (id: number | string) => `/chat/conversations/${id}/smart-replies/`,
   },
   notifications: {
     list: '/notifications/',
@@ -205,8 +218,15 @@ export const ENDPOINTS = {
   },
   /** Runtime config the app may read before login — only rows marked public. */
   publicSettings: '/admin/settings/public/',
+  /** Admin-only moderation (the server enforces the ADMIN role). */
+  admin: {
+    products: '/admin/products/',
+    approveProduct: (id: number | string) => `/admin/products/${id}/approve/`,
+    removeProduct: (id: number | string) => `/admin/products/${id}/remove/`,
+  },
   recommendations: '/recommendations/',
-  search: '/profiles/photographers/search/',
+  matchmaker: '/recommendations/matchmaker/',
+  visualRecommendations: '/recommendations/visual-search/',
 } as const;
 
 export const WS_ROUTES = {

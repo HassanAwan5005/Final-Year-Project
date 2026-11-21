@@ -17,6 +17,8 @@ from rest_framework.test import APIClient
 
 from apps.core.constants import UserRole
 
+DELIVERY = {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "03001234567"}
+
 User = get_user_model()
 
 PASSWORD = "TestPass123!"
@@ -242,7 +244,7 @@ def paid_order_item(funded_buyer, product):
     from apps.marketplace.services import add_to_cart, checkout
 
     add_to_cart(funded_buyer, product)
-    order = checkout(funded_buyer)
+    order = checkout(funded_buyer, **DELIVERY)
     return order.items.first()
 
 
@@ -257,11 +259,11 @@ def product(db, photographer, category):
     from apps.marketplace.models import DigitalProduct, ProductFile, ProductType
 
     item = DigitalProduct.objects.create(
-        seller=photographer,
+        seller=photographer.user,
         category=category,
         title="Warm Desi Wedding Presets",
         description="Twelve presets tuned for South Asian wedding lighting.",
-        product_type=ProductType.LIGHTROOM_PRESET,
+        product_type=ProductType.CAMERA_ACCESSORY,
         price=Decimal("3500.00"),
         compare_at_price=Decimal("5000.00"),
         is_published=True,
@@ -282,10 +284,10 @@ def second_product(db, photographer, category):
     from apps.marketplace.models import DigitalProduct, ProductType
 
     return DigitalProduct.objects.create(
-        seller=photographer,
+        seller=photographer.user,
         category=category,
         title="Cinematic Wedding LUT Bundle",
-        product_type=ProductType.WEDDING_LUT,
+        product_type=ProductType.LENS,
         price=Decimal("2000.00"),
         is_published=True,
         is_approved=True,

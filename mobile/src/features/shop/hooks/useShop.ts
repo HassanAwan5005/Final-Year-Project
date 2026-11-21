@@ -1,11 +1,11 @@
 /**
- * React Query hooks for the shop, wallet, profile and wishlist.
+ * React Query hooks for the shop, profile and wishlist.
  *
  * WHAT A PURCHASE INVALIDATES
  * ---------------------------
- * Buying touches five things a user can see at once: the cart (now empty),
- * the wallet (now smaller), the purchases library (now larger), the orders
- * list, and the product grid (those cards are now "Owned"). Invalidating only
+ * Buying (cash on delivery) touches four things a user can see at once: the
+ * cart (now empty), the purchases library (now larger), the orders list, and
+ * the product grid (those cards are now "Owned"). Invalidating only
  * the cart leaves a Buy button on something the buyer already owns, which
  * then errors — so the mutations below clear whole key prefixes rather than
  * naming individual queries.
@@ -19,10 +19,13 @@ import {
 } from '@tanstack/react-query';
 
 import { qk } from '../../../api/queryKeys';
+import { useAuthStore } from '../../../store/authStore';
 import {
   profileApi,
   shopApi,
   wishlistApi,
+  type CheckoutDelivery,
+  type CreateListingPayload,
   type ShopFilters,
 } from '../../../api/services/shop.api';
 
@@ -107,7 +110,7 @@ export function useClearCart() {
 export function useCheckout() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => shopApi.checkout(),
+    mutationFn: (delivery: CheckoutDelivery) => shopApi.checkout(delivery),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.shop.all });
       queryClient.invalidateQueries({ queryKey: qk.profile.all });
@@ -166,8 +169,21 @@ export function useSellerSummary() {
   });
 }
 
+export function useCreateListing() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: CreateListingPayload) => shopApi.createListing(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.shop.sellerProducts });
+      queryClient.invalidateQueries({ queryKey: qk.shop.sellerSummary });
+    },
+    // Not idempotent: a retry would create a second listing.
+    retry: false,
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// PROFILE & WALLET
+// PROFILE
 // ═══════════════════════════════════════════════════════════════════════════
 export function useMyProfile() {
   return useQuery({
@@ -190,39 +206,29 @@ export function useUpdateProfile() {
   });
 }
 
-export function useWallet() {
-  return useQuery({
-    queryKey: qk.profile.wallet,
-    queryFn: () => profileApi.wallet(),
-    staleTime: 30_000,
-  });
-}
-
-export function useTransactions() {
-  return useQuery({
-    queryKey: qk.profile.transactions,
-    queryFn: () => profileApi.transactions(),
-    staleTime: 30_000,
-  });
-}
-
-export function useTopUps() {
-  return useQuery({
-    queryKey: qk.profile.topups,
-    queryFn: () => profileApi.topups(),
-    staleTime: 30_000,
-  });
-}
-
-export function useRequestTopUp() {
+export function useUpdateUser() {
+  const setUser = useAuthStore((s) => s.setUser);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: profileApi.requestTopUp,
-    // The balance does NOT change here — an admin has to verify the receipt
-    // first. Only the pending count moves.
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.profile.topups });
-      queryClient.invalidateQueries({ queryKey: qk.profile.wallet });
+    mutationFn: (payload: { full_name?: string; phone?: string; city?: string; delete_avatar?: boolean }) =>
+      profileApi.updateUser(payload),
+    onSuccess: (updatedUser) => {
+      setUser(updatedUser);
+      queryClient.invalidateQueries({ queryKey: qk.profile.me });
+      queryClient.invalidateQueries({ queryKey: qk.photographers.all });
+    },
+    retry: false,
+  });
+}
+
+export function useDeleteAccount() {
+  const logout = useAuthStore((s) => s.logout);
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (reason?: string) => profileApi.deleteAccount(reason),
+    onSuccess: async () => {
+      queryClient.clear();
+      await logout();
     },
     retry: false,
   });

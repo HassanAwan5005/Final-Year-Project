@@ -102,7 +102,7 @@ export function WishlistScreen({
           refreshControl={
             <RefreshControl
               refreshing={wishlist.isRefetching}
-              onRefresh={() => wishlist.refetch()}
+              onRefresh={() => { void wishlist.refetch(); }}
               tintColor={colors.gold}
             />
           }
@@ -135,7 +135,7 @@ export function WishlistScreen({
           refreshControl={
             <RefreshControl
               refreshing={wishlist.isRefetching}
-              onRefresh={() => wishlist.refetch()}
+              onRefresh={() => { void wishlist.refetch(); }}
               tintColor={colors.gold}
             />
           }
