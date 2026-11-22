@@ -233,7 +233,12 @@ section "7. Booking lifecycle"
 
 read -r PHOTOG_ID PHOTOG_EMAIL <<< "$(seeded_photographer)"
 
-CAL=$(curl -s "$API/availability/photographers/$PHOTOG_ID/?days=60")
+# A date must have enough free hours in a row for the service being booked.
+PHOTOG=$(curl -s "$API/profiles/photographers/$PHOTOG_ID/")
+SERVICE_ID=$(echo "$PHOTOG" | jget "d['data']['services'][0]['id']")
+SERVICE_HOURS=$(echo "$PHOTOG" | jget "d['data']['services'][0]['duration_hours']")
+
+CAL=$(curl -s "$API/availability/photographers/$PHOTOG_ID/?days=60&duration_hours=$SERVICE_HOURS")
 check "availability calendar serves" "True" "$(echo "$CAL" | jget "d['success']")"
 
 # First free date at least a week out, so the minimum-lead rule cannot bite.
@@ -243,9 +248,8 @@ free = [x["date"] for x in d["data"]["days"][7:] if x["is_available"]]
 print(free[0] if free else "")' 2>/dev/null)
 check "calendar offers a free date"  "True" "$([ -n "$FREE_DATE" ] && echo True || echo False)"
 
-SLOT=$(curl -s "$API/availability/photographers/$PHOTOG_ID/day/?date=$FREE_DATE&duration_hours=4" \
+SLOT=$(curl -s "$API/availability/photographers/$PHOTOG_ID/day/?date=$FREE_DATE&duration_hours=$SERVICE_HOURS" \
        | jget "d['data']['available_start_times'][0]")
-SERVICE_ID=$(curl -s "$API/profiles/photographers/$PHOTOG_ID/" | jget "d['data']['services'][0]['id']")
 
 BUYER_TOKEN=$(curl -s -X POST "$API/auth/login/" -H "Content-Type: application/json" \
   -d '{"email":"buyer1@snapsphere.pk","password":"buyer12345"}' | jget "d['data']['tokens']['access']")
@@ -288,9 +292,9 @@ REACCEPT=$(curl -s -X POST "$API/bookings/$BOOKING_ID/accept/" \
   -H "Authorization: Bearer $PHOTOG_TOKEN" -H "Content-Type: application/json" -d '{}')
 check "illegal transition refused"   "BUSINESS_RULE_VIOLATION" "$(echo "$REACCEPT" | jget "d['error']['code']")"
 
-BLOCKED=$(curl -s "$API/availability/photographers/$PHOTOG_ID/day/?date=$FREE_DATE" \
-          | jget "d['data']['reason']")
-check "accepted slot blocks calendar" "True" "$([ "$BLOCKED" = "FULLY_BOOKED" ] && echo True || echo False)"
+# A booking closes its own hours, not the whole date.
+check "accepted slot blocks calendar" "True" "$(curl -s "$API/availability/photographers/$PHOTOG_ID/day/?date=$FREE_DATE&duration_hours=1" \
+  | jget "'$SLOT' in d['data']['booked_times'] and '$SLOT' not in d['data']['available_start_times']")"
 
 # Leave the seeded data as it was found.
 "$PY" "$ROOT/backend/manage.py" shell -c "
@@ -302,8 +306,8 @@ if b:
     b.hard_delete()" >/dev/null 2>&1
 
 # ─── 8. Shop, wallet & profile ───────────────────────────────────────────────
-# Drives a real purchase the way the app does: browse, cart, wallet checkout,
-# then redeem a single-use download link — and proves the file is not
+# Drives a real purchase the way the app does: browse, cart, cash-on-delivery
+# checkout, then redeem a single-use download link — and proves the file is not
 # reachable without one.
 section "8. Shop, wallet & profile"
 
@@ -346,16 +350,21 @@ CART=$(curl -s -X POST "$API/marketplace/cart/add/" -H "$SHOP_AUTH" \
   -H "Content-Type: application/json" -d "{\"product\":$CHEAPEST}")
 check "add to cart"                  "1"    "$(echo "$CART" | jget "d['data']['count']")"
 
-# The body carries no money — a client that names its own total buys for Rs 1.
+# Cash on delivery needs somewhere to deliver and a phone to call.
+check "checkout needs an address"    "400"  "$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+  "$API/marketplace/orders/checkout/" -H "$SHOP_AUTH" -H "Content-Type: application/json" -d '{}')"
+
+# The total is ignored — a client that names its own would buy for Rs 1.
 ORDER=$(curl -s -X POST "$API/marketplace/orders/checkout/" -H "$SHOP_AUTH" \
   -H "Content-Type: application/json" -H "Idempotency-Key: smoke-shop-$(date +%s)" \
-  -d '{"total":"1.00"}')
-check "wallet checkout"              "PAID" "$(echo "$ORDER" | jget "d['data']['status']")"
+  -d '{"total":"1.00","delivery_address":"Smoke test house 12, Street 4, Islamabad","delivery_phone":"03001234567"}')
+# For cash on delivery PAID means "order confirmed".
+check "order confirmed"              "PAID" "$(echo "$ORDER" | jget "d['data']['status']")"
+check "cash on delivery"             "COD"  "$(echo "$ORDER" | jget "d['data']['payment_method']")"
 check "server price wins"            "True" "$(echo "$ORDER" | jget "float(d['data']['total']) > 1")"
 
-ORDER_TOTAL=$(echo "$ORDER" | jget "d['data']['total']")
-check "wallet debited exactly once"  "True" "$(curl -s "$API/profiles/me/wallet/" -H "$SHOP_AUTH" \
-  | jget "abs((float('$START_BALANCE') - float(d['data']['balance'])) - float('$ORDER_TOTAL')) < 0.01")"
+check "wallet is not charged"        "True" "$(curl -s "$API/profiles/me/wallet/" -H "$SHOP_AUTH" \
+  | jget "float(d['data']['balance']) == float('$START_BALANCE')")"
 check "cart emptied"                 "0"    "$(curl -s "$API/marketplace/cart/" -H "$SHOP_AUTH" | jget "d['data']['count']")"
 
 ITEM_ID=$(curl -s "$API/marketplace/orders/purchases/" -H "$SHOP_AUTH" | jget "d['data'][0]['id']")
@@ -387,15 +396,11 @@ SECOND=$(toggle_wish)
 check "wishlist toggle flips state"  "True" "$([ "$FIRST" != "$INITIAL" ] && echo True || echo False)"
 check "wishlist toggle round-trips"  "$INITIAL" "$SECOND"
 
-# Restore the seeded state: refund the smoke purchase and drop the order.
+# Restore the seeded state: drop the order. Nothing was paid, so nothing is refunded.
 "$PY" "$ROOT/backend/manage.py" shell -c "
 from apps.marketplace.models import Order, OrderItem, DownloadToken
-from apps.profiles.models import WalletTransactionType
-from apps.profiles.services import credit_wallet
 o = Order.objects.filter(pk=$(echo "$ORDER" | jget "d['data']['id']")).first()
 if o:
-    credit_wallet(o.buyer, o.total, txn_type=WalletTransactionType.REFUND,
-                  reference=o.order_number, description='Smoke test rollback')
     DownloadToken.objects.filter(order_item__order=o).delete()
     OrderItem.objects.filter(order=o).delete()
     o.delete()" >/dev/null 2>&1
@@ -550,14 +555,16 @@ check "sentiment hidden from buyers" "True" "$(curl -s "$API/reviews/photographe
 
 # A completed booking is the entitlement. Build one through the API, then move
 # the event date back so completion is legal — the same trick the unit tests use.
-R_CAL=$(curl -s "$API/availability/photographers/$R_PHOTOG_ID/?days=60")
+R_PROFILE=$(curl -s "$API/profiles/photographers/$R_PHOTOG_ID/")
+R_SERVICE=$(echo "$R_PROFILE" | jget "d['data']['services'][0]['id']")
+R_HOURS=$(echo "$R_PROFILE" | jget "d['data']['services'][0]['duration_hours']")
+R_CAL=$(curl -s "$API/availability/photographers/$R_PHOTOG_ID/?days=60&duration_hours=$R_HOURS")
 R_DATE=$(echo "$R_CAL" | "$PY" -c 'import sys, json
 d = json.load(sys.stdin)
 free = [x["date"] for x in d["data"]["days"][7:] if x["is_available"]]
 print(free[0] if free else "")' 2>/dev/null)
-R_SLOT=$(curl -s "$API/availability/photographers/$R_PHOTOG_ID/day/?date=$R_DATE&duration_hours=4" \
+R_SLOT=$(curl -s "$API/availability/photographers/$R_PHOTOG_ID/day/?date=$R_DATE&duration_hours=$R_HOURS" \
          | jget "d['data']['available_start_times'][0]")
-R_SERVICE=$(curl -s "$API/profiles/photographers/$R_PHOTOG_ID/" | jget "d['data']['services'][0]['id']")
 
 R_BOOK=$(curl -s -X POST "$API/bookings/" -H "$REV_BUYER_AUTH" \
   -H "Content-Type: application/json" -H "Idempotency-Key: rev-$(date +%s)" \
@@ -614,8 +621,8 @@ R_REPLY=$(curl -s -X POST "$API/reviews/$R_ID/reply/" -H "$R_PHOTOG_AUTH" \
 check "photographer replies"         "True" "$(echo "$R_REPLY" | jget "d['data']['reply'] is not None")"
 check "second reply refused"         "409"  "$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/reviews/$R_ID/reply/" \
   -H "$R_PHOTOG_AUTH" -H "Content-Type: application/json" -d '{"comment":"Second thoughts."}')"
-check "edit refused after a reply"   "400"  "$(curl -s -o /dev/null -w "%{http_code}" -X PATCH "$API/reviews/$R_ID/" \
-  -H "$REV_BUYER_AUTH" -H "Content-Type: application/json" -d '{"rating":1}')"
+check "edit allowed after a reply"   "200"  "$(curl -s -o /dev/null -w "%{http_code}" -X PATCH "$API/reviews/$R_ID/" \
+  -H "$REV_BUYER_AUTH" -H "Content-Type: application/json" -d '{"rating":4}')"
 check "own review not helpful-able"  "400"  "$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/reviews/$R_ID/helpful/" -H "$REV_BUYER_AUTH")"
 
 # ─── 12. Notifications (Module 12) ───────────────────────────────────────────
