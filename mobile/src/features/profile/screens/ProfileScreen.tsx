@@ -50,6 +50,7 @@ export function ProfileScreen({
   onOpenServices,
   onOpenCalendar,
   onEditProfile,
+  onVerifyEmail,
   onOpenReviews,
   onOpenMessages,
   onOpenNotifications,
@@ -63,6 +64,7 @@ export function ProfileScreen({
   onOpenServices?: () => void;
   onOpenCalendar?: () => void;
   onEditProfile?: () => void;
+  onVerifyEmail?: () => void;
   /** Module 9 — "my reviews" for a buyer, "reviews received" for a photographer. */
   onOpenReviews?: () => void;
   onOpenMessages?: () => void;
@@ -144,6 +146,15 @@ export function ProfileScreen({
                   <Ionicons name="checkmark-circle" size={11} color={colors.green} />
                   <Text style={styles.verifiedText}>Verified</Text>
                 </View>
+              ) : onVerifyEmail ? (
+                <Pressable
+                  onPress={onVerifyEmail}
+                  hitSlop={10}
+                  style={styles.rolePill}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.rolePillText}>Verify email</Text>
+                </Pressable>
               ) : null}
             </View>
           </View>

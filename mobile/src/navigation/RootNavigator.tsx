@@ -3,6 +3,7 @@ import React, { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { setSessionExpiredHandler } from '../api/client';
+import { VerifyEmailScreen } from '../features/auth/screens/VerifyEmailScreen';
 import { usePresenceSocket } from '../features/chat/hooks/useChat';
 import { useNotificationSocket } from '../features/notifications/hooks/useNotifications';
 import { useAuthStore } from '../store/authStore';
@@ -32,8 +33,15 @@ const navTheme = {
 };
 
 export function RootNavigator() {
-  const { isBootstrapping, isAuthenticated, user, bootstrap, clearSession } =
-    useAuthStore();
+  const {
+    isBootstrapping,
+    isAuthenticated,
+    isVerifyPending,
+    user,
+    bootstrap,
+    clearSession,
+    finishVerify,
+  } = useAuthStore();
 
   /**
    * One notification socket for the whole signed-in app.
@@ -74,6 +82,12 @@ export function RootNavigator() {
       */}
       {!isAuthenticated || !user ? (
         <AuthNavigator />
+      ) : isVerifyPending && !user.is_email_verified ? (
+        <VerifyEmailScreen
+          codeAlreadySent
+          closeLabel="Verify later"
+          onClose={finishVerify}
+        />
       ) : user.role === 'ADMIN' ? (
         <AdminNavigator />
       ) : user.role === 'PHOTOGRAPHER' ? (

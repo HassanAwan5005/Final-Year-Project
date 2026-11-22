@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
@@ -12,11 +12,13 @@ import { colors, radius, spacing, typography } from '../../../theme';
 import { loginSchema, type LoginForm } from '../schemas';
 
 interface Props {
+  /** Set after a password reset, so the sign-in is for that same account. */
+  resetEmail?: string;
   onGoRegister: () => void;
   onGoForgot: () => void;
 }
 
-export function LoginScreen({ onGoRegister, onGoForgot }: Props) {
+export function LoginScreen({ resetEmail, onGoRegister, onGoForgot }: Props) {
   const login = useAuthStore((s) => s.login);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -25,11 +27,20 @@ export function LoginScreen({ onGoRegister, onGoForgot }: Props) {
     control,
     handleSubmit,
     setError,
+    reset,
     formState: { errors },
   } = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
     defaultValues: { email: '', password: '' },
   });
+
+  // This screen stays mounted under "Forgot password", so it would otherwise
+  // still hold whatever email was typed before — possibly another account.
+  useEffect(() => {
+    if (!resetEmail) return;
+    reset({ email: resetEmail, password: '' });
+    setFormError(null);
+  }, [resetEmail, reset]);
 
   const onSubmit = async (values: LoginForm) => {
     setSubmitting(true);

@@ -9,6 +9,7 @@ import { BookingsScreen } from '../features/bookings/screens/BookingsScreen';
 import { RequestsScreen } from '../features/bookings/screens/RequestsScreen';
 import { PortfolioScreen } from '../features/portfolio/screens/PortfolioScreen';
 import { ProfileScreen } from '../features/profile/screens/ProfileScreen';
+import { VerifyEmailScreen } from '../features/auth/screens/VerifyEmailScreen';
 import { WishlistScreen } from '../features/profile/screens/WishlistScreen';
 import { ProductDetailScreen } from '../features/shop/screens/ProductDetailScreen';
 import { PurchasesScreen } from '../features/shop/screens/PurchasesScreen';
@@ -56,6 +57,7 @@ export type PhotographerStackParams = {
   MyServices: undefined;
   MyCalendar: undefined;
   EditProfile: undefined;
+  VerifyEmail: undefined;
   /** Module 9 — the reviews this photographer received, and their replies. */
   ReceivedReviews: undefined;
   // ─── Modules 12 & 13 ────────────────────────────────────────────────────
@@ -145,6 +147,7 @@ function PhotographerTabs({ navigation }: any) {
             onOpenServices={() => navigation.navigate('MyServices')}
             onOpenCalendar={() => navigation.navigate('MyCalendar')}
             onEditProfile={() => navigation.navigate('EditProfile')}
+            onVerifyEmail={() => navigation.navigate('VerifyEmail')}
             onOpenReviews={() => navigation.navigate('ReceivedReviews')}
             onOpenMessages={() => navigation.navigate('Conversations')}
             onOpenNotifications={() => navigation.navigate('Notifications')}
@@ -257,6 +260,16 @@ export function PhotographerNavigator() {
 
       <Stack.Screen name="EditProfile">
         {({ navigation }) => <EditProfileScreen onBack={() => navigation.goBack()} />}
+      </Stack.Screen>
+
+      <Stack.Screen name="VerifyEmail">
+        {({ navigation }) => (
+          <VerifyEmailScreen
+            codeAlreadySent={false}
+            closeLabel="Back to profile"
+            onClose={() => navigation.goBack()}
+          />
+        )}
       </Stack.Screen>
 
       <Stack.Screen name="Wishlist">

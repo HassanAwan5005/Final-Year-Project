@@ -26,6 +26,7 @@ logger = logging.getLogger("snapsphere")
 OTP_TTL_MINUTES = 15
 OTP_LENGTH = 6
 MAX_OTP_ATTEMPTS = 10
+MAX_LIVE_VERIFICATION_CODES = 3
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -39,9 +40,25 @@ def _generate_otp() -> str:
 @transaction.atomic
 def issue_otp(user, purpose: str) -> str:
     """
-    Create a fresh OTP, deleting any outstanding ones for the same purpose.
+    Create a fresh OTP.
+
+    Outstanding codes for the same purpose are deleted, except that the last
+    few email-verification codes keep working until they expire: emails arrive
+    late and out of order, so a user who asked twice may well type the first.
+    A password-reset code is always replaced, and so is a code that was locked
+    by too many wrong guesses.
     """
-    OTPCode.objects.filter(user=user, purpose=purpose).delete()
+    previous = OTPCode.objects.filter(user=user, purpose=purpose)
+    keep = []
+    if purpose == OTPPurpose.EMAIL_VERIFICATION:
+        live = previous.filter(used_at__isnull=True, expires_at__gt=timezone.now())
+        if not live.filter(attempts__gte=MAX_OTP_ATTEMPTS).exists():
+            keep = list(
+                live.order_by("-created_at").values_list("id", flat=True)[
+                    : MAX_LIVE_VERIFICATION_CODES - 1
+                ]
+            )
+    previous.exclude(id__in=keep).delete()
 
     code = _generate_otp()
     OTPCode.objects.create(
@@ -55,14 +72,17 @@ def issue_otp(user, purpose: str) -> str:
 
 
 @transaction.atomic
-def verify_otp(user, code: str, purpose: str) -> bool:
+def check_otp(user, code: str, purpose: str) -> str | None:
     """
-    Check a submitted code.
-    Matches against any valid unexpired OTP created for this user and purpose.
+    Check a submitted code. Returns None when it is right, else what went wrong.
+
+    Returns the error instead of raising it because raising inside the
+    transaction would roll back the failed-attempt count, and the limit on
+    wrong guesses would never be reached. Callers raise after committing.
     """
     clean_code = str(code).strip().replace(" ", "")
     if not clean_code:
-        raise BusinessRuleViolation("Please enter the 6-digit code.")
+        return "Please enter the 6-digit code."
 
     valid_otps = (
         OTPCode.objects.select_for_update()
@@ -76,7 +96,12 @@ def verify_otp(user, code: str, purpose: str) -> bool:
     )
 
     if not valid_otps.exists():
-        raise BusinessRuleViolation("No active verification code was found. Please request a new code.")
+        return "No active verification code was found. Please request a new code."
+
+    # Wrong guesses are counted on the newest code; once it locks, the older
+    # ones must not stay open to guessing.
+    if valid_otps.first().attempts >= MAX_OTP_ATTEMPTS:
+        return "Too many incorrect attempts. Please request a new code."
 
     for otp_obj in valid_otps:
         if otp_obj.attempts >= MAX_OTP_ATTEMPTS:
@@ -85,7 +110,7 @@ def verify_otp(user, code: str, purpose: str) -> bool:
             otp_obj.used_at = timezone.now()
             otp_obj.save(update_fields=["used_at", "updated_at"])
             valid_otps.exclude(id=otp_obj.id).update(used_at=timezone.now())
-            return True
+            return None
 
     # If no match, increment attempt counter on the newest OTP
     newest = valid_otps.first()
@@ -94,12 +119,19 @@ def verify_otp(user, code: str, purpose: str) -> bool:
         newest.save(update_fields=["attempts", "updated_at"])
         remaining = max(0, MAX_OTP_ATTEMPTS - newest.attempts)
         if remaining == 0:
-            raise BusinessRuleViolation("Too many incorrect attempts. Please request a new code.")
-        raise BusinessRuleViolation(
-            f"Incorrect code. {remaining} attempt{'s' if remaining != 1 else ''} remaining."
-        )
+            return "Too many incorrect attempts. Please request a new code."
+        return f"Incorrect code. {remaining} attempt{'s' if remaining != 1 else ''} remaining."
 
-    raise BusinessRuleViolation("Invalid or expired code. Please request a new code.")
+    return "Invalid or expired code. Please request a new code."
+
+
+@transaction.atomic
+def resend_otp(user, purpose: str) -> None:
+    """Replace the outstanding code with a fresh one and email it."""
+    code = issue_otp(user, purpose)
+    transaction.on_commit(
+        lambda: _send_verification_email(user.id, user.email, user.full_name, code)
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -157,11 +189,14 @@ def _send_verification_email(user_id: int, email: str, name: str, code: str) -> 
     ).start()
 
 
-@transaction.atomic
 def verify_email(user, code: str):
-    verify_otp(user, code, OTPPurpose.EMAIL_VERIFICATION)
-    user.is_email_verified = True
-    user.save(update_fields=["is_email_verified", "updated_at"])
+    with transaction.atomic():
+        error = check_otp(user, code, OTPPurpose.EMAIL_VERIFICATION)
+        if error is None:
+            user.is_email_verified = True
+            user.save(update_fields=["is_email_verified", "updated_at"])
+    if error is not None:
+        raise BusinessRuleViolation(error)
     return user
 
 
@@ -238,7 +273,6 @@ def _send_reset_email(user_id: int, email: str, name: str, code: str) -> None:
     ).start()
 
 
-@transaction.atomic
 def confirm_password_reset(email: str, code: str, new_password: str):
     clean_email = email.lower().strip()
     user = User.objects.filter(email__iexact=clean_email, is_blocked=False).first()
@@ -246,18 +280,22 @@ def confirm_password_reset(email: str, code: str, new_password: str):
         # Same generic message as a wrong code — no enumeration signal.
         raise BusinessRuleViolation("Invalid or expired reset code.")
 
-    verify_otp(user, code, OTPPurpose.PASSWORD_RESET)
+    with transaction.atomic():
+        error = check_otp(user, code, OTPPurpose.PASSWORD_RESET)
+        if error is None:
+            user.set_password(new_password)
+            user.token_version += 1
+            user.failed_login_attempts = 0
+            user.locked_until = None
+            user.save(
+                update_fields=[
+                    "password", "token_version", "failed_login_attempts",
+                    "locked_until", "updated_at",
+                ]
+            )
+    if error is not None:
+        raise BusinessRuleViolation(error)
 
-    user.set_password(new_password)
-    user.token_version += 1
-    user.failed_login_attempts = 0
-    user.locked_until = None
-    user.save(
-        update_fields=[
-            "password", "token_version", "failed_login_attempts",
-            "locked_until", "updated_at",
-        ]
-    )
     logger.info("Password reset completed", extra={"user_id": user.id})
     return user
 
