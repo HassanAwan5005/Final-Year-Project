@@ -21,7 +21,6 @@ from decimal import Decimal
 from django.db.models import Count, Prefetch, Q, QuerySet, Sum
 
 from apps.marketplace.models import (
-    CartItem,
     DigitalProduct,
     DownloadToken,
     Order,
@@ -57,27 +56,31 @@ def products_for_list() -> QuerySet[DigitalProduct]:
     return purchasable_products()
 
 
-def product_detail(slug: str) -> DigitalProduct | None:
+def product_detail(slug: str, user=None) -> DigitalProduct | None:
     """
     One product, with its file manifest pre-joined.
+
+    A seller can also open their own listing while it is still in review.
 
     The file *names and sizes* are public — a buyer deciding whether to spend
     Rs 5,700 needs to know they get 42 presets and not one. The bytes are not:
     `ProductFile.file` lives on private storage and has no reachable URL.
     """
-    return (
-        purchasable_products()
-        .prefetch_related(
-            Prefetch(
-                "files",
-                queryset=ProductFile.objects.order_by("display_order").only(
-                    "id", "product_id", "name", "file_size_mb", "display_order"
-                ),
-            )
-        )
-        .filter(slug=slug)
-        .first()
+    files = Prefetch(
+        "files",
+        queryset=ProductFile.objects.order_by("display_order").only(
+            "id", "product_id", "name", "file_size_mb", "display_order"
+        ),
     )
+    product = purchasable_products().prefetch_related(files).filter(slug=slug).first()
+    if product is None and user is not None and user.is_authenticated:
+        product = (
+            DigitalProduct.objects.filter(seller=user, slug=slug)
+            .select_related("seller", "seller__photographer_profile", "category")
+            .prefetch_related(files)
+            .first()
+        )
+    return product
 
 
 def featured_products(limit: int = 10):
@@ -94,6 +97,15 @@ def products_by_seller(user) -> QuerySet[DigitalProduct]:
         DigitalProduct.objects.filter(seller=user, is_deleted=False)
         .select_related("category")
         .order_by("-created_at")
+    )
+
+
+def seller_product(user, product_id) -> DigitalProduct | None:
+    """One of the caller's own listings — anyone else's does not exist here."""
+    return (
+        DigitalProduct.objects.filter(seller=user, pk=product_id)
+        .select_related("category")
+        .first()
     )
 
 
@@ -161,54 +173,6 @@ def owned_product_ids(user) -> set[int]:
             order__buyer=user, order__status=OrderStatus.PAID
         ).values_list("product_id", flat=True)
     )
-
-
-def owns_product(user, product) -> bool:
-    return OrderItem.objects.filter(
-        order__buyer=user, order__status=OrderStatus.PAID, product=product
-    ).exists()
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# CART
-# ═══════════════════════════════════════════════════════════════════════════
-def get_cart(user) -> QuerySet[CartItem]:
-    return (
-        CartItem.objects.filter(user=user)
-        .select_related("product", "product__seller", "product__seller__photographer_profile")
-        .order_by("-created_at")
-    )
-
-
-def cart_summary(user) -> dict:
-    """
-    Everything the cart screen renders, including why a line is unbuyable.
-
-    A product can be delisted, or already owned, between adding it and opening
-    the cart. Reporting that per line — rather than failing the whole checkout
-    with one opaque error — lets the buyer remove the offending item and carry
-    on with the rest.
-    """
-    items = list(get_cart(user))
-    owned = owned_product_ids(user)
-
-    payable = Decimal("0.00")
-    blocked = 0
-    for item in items:
-        item.is_owned = item.product_id in owned
-        item.is_available = item.product.is_purchasable and not item.is_owned
-        if item.is_available:
-            payable += item.product.price
-        else:
-            blocked += 1
-
-    return {
-        "items": items,
-        "count": len(items),
-        "subtotal": payable,
-        "total": payable,
-        "unavailable_count": blocked,
-    }
 
 
 def wallet_balance(user) -> Decimal:

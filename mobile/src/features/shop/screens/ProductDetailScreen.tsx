@@ -1,8 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import React from 'react';
+import React, { useState } from 'react';
 import {
-  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,41 +12,39 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ApiError } from '../../../api/client';
+import type { DigitalProductDetail } from '../../../types/models';
 import { ErrorState, LoadingState } from '../../../components/feedback/States';
 import { Avatar } from '../../../components/ui/Avatar';
 import { Button } from '../../../components/ui/Button';
+import { useAuthStore } from '../../../store/authStore';
 import { colors, radius, spacing, typography } from '../../../theme';
-import { formatCount, formatPKR } from '../../../utils/format';
+import { formatPKR } from '../../../utils/format';
+import { PhotoViewer } from '../components/PhotoViewer';
 import { ProductThumb } from '../components/ProductThumb';
-import {
-  useAddToCart,
-  useCart,
-  useProduct,
-  useToggleWishlist,
-} from '../hooks/useShop';
+import { useProduct, useToggleWishlist } from '../hooks/useShop';
 
 /**
  * A product page.
  *
- * The file manifest is shown before purchase deliberately: someone deciding
- * whether to spend Rs 5,700 needs to know they get 42 presets and not one.
- * The names and sizes are public; the bytes are not, and nothing on this
- * screen can reach them — a download link only exists after a purchase.
+ * Buying is a conversation: anyone interested messages the seller and the two
+ * agree a deal in chat. The seller sees "Edit ad" here instead.
  */
 export function ProductDetailScreen({
   slug,
   onBack,
-  onOpenCart,
+  onMessageSeller,
+  onEdit,
 }: {
   slug: string;
   onBack: () => void;
-  onOpenCart: () => void;
+  onMessageSeller: (product: DigitalProductDetail) => void;
+  onEdit: (productId: number) => void;
 }) {
   const { width } = useWindowDimensions();
   const query = useProduct(slug);
-  const cart = useCart();
-  const addToCart = useAddToCart();
   const toggleSave = useToggleWishlist();
+  const userId = useAuthStore((s) => s.user?.id);
+  const [viewing, setViewing] = useState<number | null>(null);
 
   if (query.isLoading) return <LoadingState label="Loading product…" />;
   if (query.isError || !query.data) {
@@ -61,12 +58,12 @@ export function ProductDetailScreen({
 
   const product = query.data;
 
-  const add = () => {
-    addToCart.mutate(product.id, {
-      onError: (error) =>
-        Alert.alert('Could not add to cart', (error as ApiError).message),
-    });
-  };
+  const isMine = product.seller.id === userId;
+  const photos = product.preview_image_urls.length
+    ? product.preview_image_urls
+    : product.thumbnail_url
+      ? [product.thumbnail_url]
+      : [];
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
@@ -89,25 +86,46 @@ export function ProductDetailScreen({
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* ─── Gallery ─────────────────────────────────────────────────── */}
-        <View style={[styles.hero, { height: width * 0.62 }]}>
+        <Pressable
+          style={[styles.hero, { height: width * 0.62 }]}
+          onPress={() => setViewing(0)}
+          disabled={!photos.length}
+          accessibilityRole="imagebutton"
+          accessibilityLabel="View photos"
+        >
           <ProductThumb
-            uri={product.thumbnail_url}
+            // Remount when the cover changes, so an old load error is forgotten.
+            key={photos[0] ?? 'none'}
+            uri={photos[0] ?? null}
             title={product.title}
             productType={product.product_type}
             style={styles.heroImage}
             iconSize={38}
             showLabel
           />
-        </View>
+          {photos.length ? (
+            <View style={styles.photoCount}>
+              <Ionicons name="images-outline" size={13} color={colors.white} />
+              <Text style={styles.photoCountText}>{photos.length}</Text>
+            </View>
+          ) : null}
+        </Pressable>
 
-        {product.preview_image_urls.length ? (
+        {photos.length > 1 ? (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.previews}
           >
-            {product.preview_image_urls.map((uri) => (
-              <Image key={uri} source={{ uri }} style={styles.preview} contentFit="cover" />
+            {photos.map((uri, index) => (
+              <Pressable
+                key={uri}
+                onPress={() => setViewing(index)}
+                accessibilityRole="imagebutton"
+                accessibilityLabel={`View photo ${index + 1}`}
+              >
+                <Image source={{ uri }} style={styles.preview} contentFit="cover" />
+              </Pressable>
             ))}
           </ScrollView>
         ) : null}
@@ -131,11 +149,19 @@ export function ProductDetailScreen({
             ) : null}
           </View>
 
-          <View style={styles.stats}>
-            <Stat icon="download-outline" value={formatCount(product.sales_count)} label="sales" />
-            <Stat icon="document-outline" value={String(product.file_count)} label="files" />
-            <Stat icon="server-outline" value={`${product.total_size_mb} MB`} label="total" />
-          </View>
+          {product.address ? (
+            <View style={styles.addressRow}>
+              <Ionicons name="location-outline" size={16} color={colors.gold} />
+              <Text style={styles.address}>{product.address}</Text>
+            </View>
+          ) : null}
+
+          {product.files.length ? (
+            <View style={styles.stats}>
+              <Stat icon="document-outline" value={String(product.file_count)} label="files" />
+              <Stat icon="server-outline" value={`${product.total_size_mb} MB`} label="total" />
+            </View>
+          ) : null}
 
           {/* ─── Seller ────────────────────────────────────────────────── */}
           <View style={styles.seller}>
@@ -146,13 +172,15 @@ export function ProductDetailScreen({
             />
             <View style={styles.sellerBody}>
               <Text style={styles.sellerName}>{product.seller.display_name}</Text>
-              <Text style={styles.sellerMeta}>
-                {product.license_type === 'PERSONAL'
-                  ? 'Personal use licence'
-                  : product.license_type === 'COMMERCIAL'
-                    ? 'Commercial licence'
-                    : 'Extended commercial licence'}
-              </Text>
+              {product.files.length ? (
+                <Text style={styles.sellerMeta}>
+                  {product.license_type === 'PERSONAL'
+                    ? 'Personal use licence'
+                    : product.license_type === 'COMMERCIAL'
+                      ? 'Commercial licence'
+                      : 'Extended commercial licence'}
+                </Text>
+              ) : null}
             </View>
             {product.seller.is_verified ? (
               <Ionicons name="checkmark-circle" size={18} color={colors.blue} />
@@ -160,7 +188,7 @@ export function ProductDetailScreen({
           </View>
 
           {product.description ? (
-            <Section title="About this pack">
+            <Section title="Description">
               <Text style={styles.body}>{product.description}</Text>
             </Section>
           ) : null}
@@ -196,25 +224,20 @@ export function ProductDetailScreen({
 
       {/* ─── Action bar ──────────────────────────────────────────────────── */}
       <View style={styles.actionBar}>
-        {product.is_owned ? (
-          <View style={styles.ownedBar}>
-            <Ionicons name="checkmark-circle" size={18} color={colors.green} />
-            <Text style={styles.ownedText}>
-              You own this — find it in Purchases to download.
-            </Text>
-          </View>
-        ) : product.in_cart ? (
-          <Button label="Go to cart" onPress={onOpenCart} />
+        {isMine ? (
+          <Button label="Edit ad" onPress={() => onEdit(product.id)} />
         ) : (
-          <>
-            <Button
-              label="Add to cart"
-              onPress={add}
-              loading={addToCart.isPending}
-            />
-          </>
+          <Button label="Message seller" onPress={() => onMessageSeller(product)} />
         )}
       </View>
+
+      {viewing !== null ? (
+        <PhotoViewer
+          uris={photos}
+          initialIndex={viewing}
+          onClose={() => setViewing(null)}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -278,6 +301,26 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
   },
   discountText: { ...typography.tiny, color: colors.green, fontWeight: '700' },
+  photoCount: {
+    position: 'absolute',
+    right: spacing.md,
+    bottom: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.overlay,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: radius.sm,
+  },
+  photoCountText: { ...typography.tiny, color: colors.white, fontWeight: '600' },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+    marginTop: spacing.md,
+  },
+  address: { ...typography.body, color: colors.sub, flex: 1 },
   stats: {
     flexDirection: 'row',
     gap: spacing.xxl,
@@ -328,6 +371,4 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     backgroundColor: colors.surface,
   },
-  ownedBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  ownedText: { ...typography.caption, color: colors.green, flex: 1 },
 });

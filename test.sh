@@ -306,8 +306,8 @@ if b:
     b.hard_delete()" >/dev/null 2>&1
 
 # ─── 8. Shop, wallet & profile ───────────────────────────────────────────────
-# Drives a real purchase the way the app does: browse, cart, cash-on-delivery
-# checkout, then redeem a single-use download link — and proves the file is not
+# The shop is a classifieds board: browse, then message the seller. Also redeems
+# a single-use download link for a past order — and proves the file is not
 # reachable without one.
 section "8. Shop, wallet & profile"
 
@@ -319,7 +319,6 @@ PROFILE=$(curl -s "$API/profiles/me/" -H "$SHOP_AUTH")
 check "own profile serves"           "True" "$(echo "$PROFILE" | jget "d['success']")"
 
 WALLET=$(curl -s "$API/profiles/me/wallet/" -H "$SHOP_AUTH")
-START_BALANCE=$(echo "$WALLET" | jget "d['data']['balance']")
 check "wallet balance serves"        "True" "$(echo "$WALLET" | jget "float(d['data']['balance']) >= 0")"
 
 # Every rupee must have a matching ledger row — that is what a ledger is for.
@@ -333,40 +332,33 @@ for r in rows:
     running = float(r["balance_after"])
 print("True")' 2>/dev/null)"
 
-# Pick the cheapest product this buyer does NOT already own. Taking the
-# globally cheapest would fail on a second run against the same database,
-# because by then they own it — and "you already own this" is correct
-# behaviour, not a regression.
-CHEAPEST=$(curl -s "$API/marketplace/products/?ordering=price&page_size=40" -H "$SHOP_AUTH" \
-  | "$PY" -c '
-import sys, json
-rows = json.load(sys.stdin)["data"]
-free = [r for r in rows if not r["is_owned"] and not r["in_cart"]]
-print(free[0]["id"] if free else "")' 2>/dev/null)
-check "shop browse is public"        "True" "$([ -n "$CHEAPEST" ] && echo True || echo False)"
+SHOP_ROW=$(curl -s "$API/marketplace/products/?ordering=price&page_size=1" -H "$SHOP_AUTH")
+SHOP_PRODUCT=$(echo "$SHOP_ROW" | jget "d['data'][0]['id']")
+SHOP_SELLER=$(echo "$SHOP_ROW" | jget "d['data'][0]['seller']['id']")
+check "shop browse is public"        "True" "$(curl -s "$API/marketplace/products/" | jget "len(d['data']) > 0")"
 check "filter options from data"     "True" "$(curl -s "$API/marketplace/products/filters/" | jget "d['data']['price_range']['max'] > 0")"
 
-CART=$(curl -s -X POST "$API/marketplace/cart/add/" -H "$SHOP_AUTH" \
-  -H "Content-Type: application/json" -d "{\"product\":$CHEAPEST}")
-check "add to cart"                  "1"    "$(echo "$CART" | jget "d['data']['count']")"
+# There is nothing to buy with: deals are made in chat.
+check "no cart"                      "404"  "$(curl -s -o /dev/null -w "%{http_code}" "$API/marketplace/cart/" -H "$SHOP_AUTH")"
 
-# Cash on delivery needs somewhere to deliver and a phone to call.
-check "checkout needs an address"    "400"  "$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-  "$API/marketplace/orders/checkout/" -H "$SHOP_AUTH" -H "Content-Type: application/json" -d '{}')"
+CONV_BEFORE=$("$PY" "$ROOT/backend/manage.py" shell -c "
+from apps.chat.models import Conversation
+print(','.join(str(pk) for pk in Conversation.objects.values_list('pk', flat=True)))" 2>/dev/null | tail -1)
+SHOP_CHAT=$(curl -s -X POST "$API/chat/conversations/" -H "$SHOP_AUTH" \
+  -H "Content-Type: application/json" -d "{\"user\":$SHOP_SELLER,\"product\":$SHOP_PRODUCT}")
+check "message the seller"           "$SHOP_PRODUCT" "$(echo "$SHOP_CHAT" | jget "d['data']['product']['id']")"
 
-# The total is ignored — a client that names its own would buy for Rs 1.
-ORDER=$(curl -s -X POST "$API/marketplace/orders/checkout/" -H "$SHOP_AUTH" \
-  -H "Content-Type: application/json" -H "Idempotency-Key: smoke-shop-$(date +%s)" \
-  -d '{"total":"1.00","delivery_address":"Smoke test house 12, Street 4, Islamabad","delivery_phone":"03001234567"}')
-# For cash on delivery PAID means "order confirmed".
-check "order confirmed"              "PAID" "$(echo "$ORDER" | jget "d['data']['status']")"
-check "cash on delivery"             "COD"  "$(echo "$ORDER" | jget "d['data']['payment_method']")"
-check "server price wins"            "True" "$(echo "$ORDER" | jget "float(d['data']['total']) > 1")"
-
-check "wallet is not charged"        "True" "$(curl -s "$API/profiles/me/wallet/" -H "$SHOP_AUTH" \
-  | jget "float(d['data']['balance']) == float('$START_BALANCE')")"
-check "cart emptied"                 "0"    "$(curl -s "$API/marketplace/cart/" -H "$SHOP_AUTH" | jget "d['data']['count']")"
-
+# A past order, so the download flow below has something to redeem.
+ORDER_ID=$("$PY" "$ROOT/backend/manage.py" shell -c "
+from django.utils import timezone
+from apps.accounts.models import User
+from apps.marketplace.models import DigitalProduct, Order, OrderItem, OrderStatus
+p = DigitalProduct.objects.filter(files__isnull=False).first()
+o = Order.objects.create(buyer=User.objects.get(email='buyer1@snapsphere.pk'), subtotal=p.price,
+    total=p.price, status=OrderStatus.PAID, paid_at=timezone.now())
+OrderItem.objects.create(order=o, product=p, seller=p.seller, product_title=p.title,
+    price=p.price, seller_earning=p.price)
+print(o.pk)" 2>/dev/null | tail -1)
 ITEM_ID=$(curl -s "$API/marketplace/orders/purchases/" -H "$SHOP_AUTH" | jget "d['data'][0]['id']")
 DL=$(curl -s -X POST "$API/marketplace/orders/items/$ITEM_ID/download/" -H "$SHOP_AUTH" \
   -H "Content-Type: application/json" -d '{}')
@@ -396,14 +388,18 @@ SECOND=$(toggle_wish)
 check "wishlist toggle flips state"  "True" "$([ "$FIRST" != "$INITIAL" ] && echo True || echo False)"
 check "wishlist toggle round-trips"  "$INITIAL" "$SECOND"
 
-# Restore the seeded state: drop the order. Nothing was paid, so nothing is refunded.
+# Restore the seeded state: drop the order, and the thread if this run opened it.
 "$PY" "$ROOT/backend/manage.py" shell -c "
+from apps.chat.models import Conversation
 from apps.marketplace.models import Order, OrderItem, DownloadToken
-o = Order.objects.filter(pk=$(echo "$ORDER" | jget "d['data']['id']")).first()
+o = Order.objects.filter(pk=$ORDER_ID).first()
 if o:
     DownloadToken.objects.filter(order_item__order=o).delete()
     OrderItem.objects.filter(order=o).delete()
-    o.delete()" >/dev/null 2>&1
+    o.delete()
+chat = $(echo "$SHOP_CHAT" | jget "d['data']['id']")
+if str(chat) not in '$CONV_BEFORE'.split(','):
+    Conversation.objects.filter(pk=chat, message_count=0).delete()" >/dev/null 2>&1
 
 # ─── 9. Photographer studio (Modules 5 & 6) ──────────────────────────────────
 # The photographer's own side: managing services, blocking dates, uploading

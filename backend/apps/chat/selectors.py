@@ -33,7 +33,7 @@ def conversations_for(user, *, archived: bool = False, unread_only: bool = False
             participant_links__user=user, participant_links__left_at__isnull=True
         )
         .filter(is_archived=archived)
-        .select_related("last_message_sender", "booking", "booking__service")
+        .select_related("last_message_sender", "booking", "booking__service", "product")
         .prefetch_related(
             Prefetch(
                 "participant_links",
@@ -58,7 +58,7 @@ def get_conversation(user, pk) -> Conversation | None:
     """Scoped fetch: a thread the caller is not in simply does not exist."""
     return (
         Conversation.objects.filter(pk=pk, participant_links__user=user)
-        .select_related("booking", "booking__service", "booking__photographer")
+        .select_related("booking", "booking__service", "booking__photographer", "product")
         .prefetch_related(
             Prefetch(
                 "participant_links",
@@ -71,13 +71,14 @@ def get_conversation(user, pk) -> Conversation | None:
 
 def messages_in(
     conversation,
+    user,
     *,
     after: int | None = None,
     before: int | None = None,
     limit: int = 50,
 ):
     """
-    A window of a thread.
+    A window of a thread, without the messages `user` deleted for themselves.
 
     Returned oldest-first so the app can append without reversing, but the
     `before` (scroll-back) window is selected newest-first and flipped — taking
@@ -87,6 +88,7 @@ def messages_in(
     """
     qs = (
         Message.objects.filter(conversation=conversation)
+        .exclude(deleted_for=user)
         .select_related("sender")
         .prefetch_related("attachments")
     )
@@ -101,6 +103,35 @@ def messages_in(
     rows = list(qs.order_by("-pk")[:limit])
     rows.reverse()
     return rows
+
+
+def own_previews(user, conversations) -> dict[int, str]:
+    """
+    List previews for threads where `user` deleted something for themselves.
+
+    The shared `last_message_text` would otherwise keep showing them the text
+    they just deleted. Threads with nothing hidden are not in the result.
+    """
+    thread_ids = set(
+        Message.objects.filter(
+            conversation__in=[c.pk for c in conversations], deleted_for=user
+        ).values_list("conversation_id", flat=True)
+    )
+    previews = {}
+    for thread_id in thread_ids:
+        last = (
+            Message.objects.filter(conversation_id=thread_id)
+            .exclude(deleted_for=user)
+            .order_by("-pk")
+            .first()
+        )
+        if last is None:
+            previews[thread_id] = ""
+        elif last.is_deleted:
+            previews[thread_id] = "This message was deleted"
+        else:
+            previews[thread_id] = last.preview[:200]
+    return previews
 
 
 def get_message(user, pk) -> Message | None:

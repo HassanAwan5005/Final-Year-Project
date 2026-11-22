@@ -27,10 +27,12 @@ from apps.core.models import TimeStampedModel
 
 class Conversation(TimeStampedModel):
     """
-    A 1-to-1 thread between a buyer and a photographer.
+    A 1-to-1 thread: a buyer and a photographer, or a shop seller and someone
+    interested in their product.
 
     `booking` is optional: buyers often message before booking. When a booking
     exists it is linked so the chat screen can show its status inline.
+    `product` is the shop listing the thread was most recently opened from.
     """
 
     participants = models.ManyToManyField(
@@ -40,6 +42,11 @@ class Conversation(TimeStampedModel):
     booking = models.ForeignKey(
         "bookings.Booking", null=True, blank=True, on_delete=models.SET_NULL,
         related_name="conversations",
+    )
+
+    product = models.ForeignKey(
+        "marketplace.DigitalProduct", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="conversations",
     )
 
     # Denormalised so the conversation list renders without a subquery per row.
@@ -126,6 +133,12 @@ class Message(TimeStampedModel):
     is_edited = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True)
+
+    # "Delete for me": hidden from these users, untouched for everyone else.
+    deleted_for = models.ManyToManyField(
+        "accounts.User", blank=True, related_name="+",
+        db_table="message_deleted_for",
+    )
 
     delivered_at = models.DateTimeField(null=True, blank=True)
     read_at = models.DateTimeField(null=True, blank=True)

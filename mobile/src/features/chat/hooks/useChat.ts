@@ -65,8 +65,12 @@ export function useChatUnreadTotal() {
 export function useStartConversation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { user: number; booking?: number | null; message?: string }) =>
-      chatApi.start(payload),
+    mutationFn: (payload: {
+      user: number;
+      booking?: number | null;
+      product?: number | null;
+      message?: string;
+    }) => chatApi.start(payload),
     // Idempotent server-side, so a double-tap is safe — but the list ordering
     // and the badge both moved.
     onSuccess: () => queryClient.invalidateQueries({ queryKey: qk.chat.all }),
@@ -132,6 +136,15 @@ export function useMarkThreadRead() {
   });
 }
 
+/** What a message looks like once deleted for everyone (same as the server's). */
+function blanked(rows: Message[] | undefined, messageId: number) {
+  return rows?.map((row) =>
+    row.id === messageId
+      ? { ...row, is_deleted: true, body: 'This message was deleted' }
+      : row,
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // THE THREAD ITSELF
 // ═══════════════════════════════════════════════════════════════════════════
@@ -183,6 +196,7 @@ export function useChatThread(conversationId: number | null) {
     if (!conversationId) return;
     let cancelled = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    let reconnecting = false;
 
     const connect = async () => {
       const token = await tokenStorage.getAccess();
@@ -203,6 +217,10 @@ export function useChatThread(conversationId: number | null) {
             .messages(conversationId, { after: lastId, limit: 100 })
             .then((missed) => missed.forEach(absorb))
             .catch(() => undefined);
+          // The replay only brings new messages. A message deleted for everyone
+          // while the socket was down shows up by reloading the thread.
+          if (reconnecting) queryClient.invalidateQueries({ queryKey: key });
+          reconnecting = true;
         };
 
         socket.onmessage = (event) => {
@@ -231,6 +249,9 @@ export function useChatThread(conversationId: number | null) {
                 created_at: frame.created_at,
               });
               queryClient.invalidateQueries({ queryKey: qk.chat.unread });
+            } else if (frame.type === 'message_deleted') {
+              queryClient.setQueryData<Message[]>(key, (rows) => blanked(rows, frame.id));
+              queryClient.invalidateQueries({ queryKey: qk.chat.conversations(false) });
             } else if (frame.type === 'presence' && frame.is_online) {
               // Only trust "online" from the thread socket. Its "offline" frame
               // fires when the other person merely leaves this screen while
@@ -357,12 +378,32 @@ export function useChatThread(conversationId: number | null) {
 // ═══════════════════════════════════════════════════════════════════════════
 // SINGLE MESSAGE ACTIONS
 // ═══════════════════════════════════════════════════════════════════════════
+/** Delete for everyone: both sides see "This message was deleted". */
 export function useDeleteMessage(conversationId: number | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (messageId: number) => chatApi.remove(messageId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.chat.messages(conversationId ?? 0) });
+    onSuccess: (_, messageId) => {
+      const key = qk.chat.messages(conversationId ?? 0);
+      queryClient.setQueryData<Message[]>(key, (rows) => blanked(rows, messageId));
+      queryClient.invalidateQueries({ queryKey: key });
+      queryClient.invalidateQueries({ queryKey: qk.chat.conversations(false) });
+    },
+    retry: false,
+  });
+}
+
+/** Delete for me: it disappears here and stays on the other side. */
+export function useDeleteMessageForMe(conversationId: number | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (messageId: number) => chatApi.removeForMe(messageId),
+    onSuccess: (_, messageId) => {
+      const key = qk.chat.messages(conversationId ?? 0);
+      queryClient.setQueryData<Message[]>(key, (rows) =>
+        rows?.filter((row) => row.id !== messageId),
+      );
+      queryClient.invalidateQueries({ queryKey: key });
       queryClient.invalidateQueries({ queryKey: qk.chat.conversations(false) });
     },
     retry: false,

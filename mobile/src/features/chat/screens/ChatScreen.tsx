@@ -19,12 +19,13 @@ import { ErrorState, LoadingState } from '../../../components/feedback/States';
 import { Avatar } from '../../../components/ui/Avatar';
 import { useAuthStore } from '../../../store/authStore';
 import { colors, radius, spacing, typography } from '../../../theme';
-import { formatDate, timeAgo } from '../../../utils/format';
+import { formatDate, formatPKR, timeAgo } from '../../../utils/format';
 import type { Message } from '../../../types/models';
 import {
   useChatThread,
   useConversation,
   useDeleteMessage,
+  useDeleteMessageForMe,
   useReportMessage,
   useSmartReplies,
   useStartConversation,
@@ -55,18 +56,20 @@ export function ChatScreen({
   title,
   onBack,
   onOpenBooking,
+  onOpenProduct,
 }: {
   /** An existing thread. Pass 0 or null when only `startWith` is known. */
   conversationId?: number | null;
   /**
-   * "Message this person" — used by the booking screen, which knows the other
-   * party's user id but not whether a thread exists. Resolving it here keeps the
+   * "Message this person" — used by the booking and product screens, which know
+   * the other party's user id but not whether a thread exists. Resolving it here keeps the
    * idempotent open-or-find call in one place instead of in every caller.
    */
-  startWith?: { userId: number; bookingId?: number };
+  startWith?: { userId: number; bookingId?: number; productId?: number };
   title?: string;
   onBack: () => void;
   onOpenBooking?: (bookingId: number) => void;
+  onOpenProduct?: (slug: string) => void;
 }) {
   const [resolvedId, setResolvedId] = useState<number | null>(
     initialConversationId && initialConversationId > 0 ? initialConversationId : null,
@@ -81,7 +84,11 @@ export function ChatScreen({
     // that to one thread, the second request is pure waste.
     startedRef.current = true;
     start.mutate(
-      { user: startWith.userId, booking: startWith.bookingId ?? null },
+      {
+        user: startWith.userId,
+        booking: startWith.bookingId ?? null,
+        product: startWith.productId ?? null,
+      },
       {
         onSuccess: (thread) => setResolvedId(thread.id),
         onError: (error) =>
@@ -104,6 +111,7 @@ export function ChatScreen({
       title={title}
       onBack={onBack}
       onOpenBooking={onOpenBooking}
+      onOpenProduct={onOpenProduct}
     />
   );
 }
@@ -113,16 +121,19 @@ function ChatThread({
   title,
   onBack,
   onOpenBooking,
+  onOpenProduct,
 }: {
   conversationId: number;
   title?: string;
   onBack: () => void;
   onOpenBooking?: (bookingId: number) => void;
+  onOpenProduct?: (slug: string) => void;
 }) {
   const currentUser = useAuthStore((s) => s.user);
   const conversation = useConversation(conversationId);
   const thread = useChatThread(conversationId);
   const removeMessage = useDeleteMessage(conversationId);
+  const removeForMe = useDeleteMessageForMe(conversationId);
   const report = useReportMessage();
   const toggleBlock = useToggleBlock();
   const smartReplies = useSmartReplies(conversationId);
@@ -166,6 +177,17 @@ function ChatThread({
         style: 'destructive',
         onPress: () =>
           removeMessage.mutate(message.id, {
+            onError: (error) =>
+              Alert.alert('Could not delete', (error as ApiError).message),
+          }),
+      });
+    }
+    if (message.id > 0) {
+      options.push({
+        text: 'Delete for me',
+        style: 'destructive',
+        onPress: () =>
+          removeForMe.mutate(message.id, {
             onError: (error) =>
               Alert.alert('Could not delete', (error as ApiError).message),
           }),
@@ -268,6 +290,27 @@ function ChatThread({
             {conversation.data.booking.status.toLowerCase()}
           </Text>
           {onOpenBooking ? (
+            <Ionicons name="chevron-forward" size={15} color={colors.sub} />
+          ) : null}
+        </Pressable>
+      ) : null}
+
+      {conversation.data?.product ? (
+        <Pressable
+          style={styles.bookingBar}
+          onPress={() =>
+            conversation.data?.product && onOpenProduct?.(conversation.data.product.slug)
+          }
+          disabled={!onOpenProduct || !conversation.data.product.is_available}
+        >
+          <Ionicons name="pricetag-outline" size={15} color={colors.gold} />
+          <Text style={styles.bookingText} numberOfLines={1}>
+            {conversation.data.product.title} ·{' '}
+            {conversation.data.product.is_available
+              ? formatPKR(conversation.data.product.price)
+              : 'not available right now'}
+          </Text>
+          {onOpenProduct && conversation.data.product.is_available ? (
             <Ionicons name="chevron-forward" size={15} color={colors.sub} />
           ) : null}
         </Pressable>

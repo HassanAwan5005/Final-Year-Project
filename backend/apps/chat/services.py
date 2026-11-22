@@ -16,6 +16,10 @@ inside a thread that already exists. That asymmetry is the whole anti-spam
 design: 200 photographers cold-messaging every buyer who viewed their profile is
 exactly what a marketplace chat becomes without it.
 
+The shop is the one addition: anyone may message the seller of a product that is
+live in the shop, about that product. Posting an ad is an invitation to be
+contacted.
+
 BLOCKING IS ONE-SIDED AND SILENT
 --------------------------------
 `ConversationParticipant.is_blocked` means "this participant blocked the other
@@ -48,7 +52,9 @@ MAX_MESSAGES_PER_MINUTE = 30
 # CONVERSATIONS
 # ═══════════════════════════════════════════════════════════════════════════
 @transaction.atomic
-def get_or_create_conversation(initiator, other_user, *, booking=None) -> tuple:
+def get_or_create_conversation(
+    initiator, other_user, *, booking=None, product=None
+) -> tuple:
     """
     Find the thread between these two, or open it. Returns (conversation, created).
 
@@ -61,7 +67,7 @@ def get_or_create_conversation(initiator, other_user, *, booking=None) -> tuple:
     if other_user.id == initiator.id:
         raise BusinessRuleViolation("You cannot message yourself.")
 
-    _assert_may_initiate(initiator, other_user)
+    _assert_may_initiate(initiator, other_user, product=product)
 
     existing = (
         Conversation.objects.filter(participant_links__user=initiator)
@@ -76,13 +82,17 @@ def get_or_create_conversation(initiator, other_user, *, booking=None) -> tuple:
         if booking is not None and existing.booking_id is None:
             Conversation.objects.filter(pk=existing.pk).update(booking=booking)
             existing.booking = booking
+        # The thread is about whichever product was asked about last.
+        if product is not None and existing.product_id != product.pk:
+            Conversation.objects.filter(pk=existing.pk).update(product=product)
+            existing.product = product
         # Re-opening a thread you had left rejoins you rather than starting over.
         ConversationParticipant.objects.filter(
             conversation=existing, user=initiator, left_at__isnull=False
         ).update(left_at=None)
         return existing, False
 
-    conversation = Conversation.objects.create(booking=booking)
+    conversation = Conversation.objects.create(booking=booking, product=product)
     ConversationParticipant.objects.bulk_create(
         [
             ConversationParticipant(conversation=conversation, user=initiator),
@@ -96,19 +106,29 @@ def get_or_create_conversation(initiator, other_user, *, booking=None) -> tuple:
     return conversation, True
 
 
-def _assert_may_initiate(initiator, other_user) -> None:
+def _assert_may_initiate(initiator, other_user, *, product=None) -> None:
     """
     Only a buyer may start a cold thread, and only with a listed photographer.
 
     A photographer who has a booking with this buyer may also start one — after
     an accepted booking the two are working together, and making the buyer
     speak first would be an obstacle for no benefit.
+
+    Buyers and photographers alike may message the seller of a live product.
     """
     from apps.bookings.selectors import has_booking_between
     from apps.core.constants import UserRole
 
     if other_user.is_blocked or not other_user.is_active:
         raise BusinessRuleViolation("This account is not available.")
+
+    if (
+        product is not None
+        and product.is_purchasable
+        and product.seller_id == other_user.id
+        and initiator.role in (UserRole.BUYER, UserRole.PHOTOGRAPHER)
+    ):
+        return
 
     if initiator.role == UserRole.BUYER:
         profile = getattr(other_user, "photographer_profile", None)
@@ -344,7 +364,7 @@ def mark_read(conversation, user, *, up_to: int | None = None) -> int:
 @transaction.atomic
 def delete_message(message, user) -> Message:
     """
-    Soft delete — "This message was deleted".
+    Delete for everyone — both sides see "This message was deleted".
 
     The row stays because the other party has already read it, and silently
     erasing text from someone else's history is worse than admitting it was
@@ -366,7 +386,25 @@ def delete_message(message, user) -> Message:
         Conversation.objects.filter(pk=message.conversation_id).update(
             last_message_text="This message was deleted"
         )
+    _redact_notifications(message)
+    transaction.on_commit(lambda: _broadcast_deleted(message))
     return message
+
+
+def delete_message_for_me(message, user) -> None:
+    """Hide a message from this user only; the other side still has it."""
+    _link(message.conversation, user)  # membership check
+    message.deleted_for.add(user)
+
+
+def _redact_notifications(message) -> None:
+    """The bell must not keep text that was deleted for everyone."""
+    from apps.notifications.models import Notification, NotificationType
+
+    Notification.objects.filter(
+        notification_type=NotificationType.NEW_MESSAGE,
+        payload__message_id=message.pk,
+    ).update(body="This message was deleted")
 
 
 @transaction.atomic
@@ -473,6 +511,23 @@ def _broadcast(conversation, message) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Chat broadcast failed: %s", exc)
+
+
+def _broadcast_deleted(message) -> None:
+    """Blank the message on every phone that has the thread open right now."""
+    from asgiref.sync import async_to_sync
+    from channels.layers import get_channel_layer
+
+    layer = get_channel_layer()
+    if layer is None:
+        return
+    try:
+        async_to_sync(layer.group_send)(
+            f"chat_{message.conversation_id}",
+            {"type": "message.deleted", "message_id": message.pk},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Chat delete broadcast failed: %s", exc)
 
 
 def _broadcast_read(conversation, user, up_to: int) -> None:

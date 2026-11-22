@@ -8,19 +8,15 @@ No field below exposes `ProductFile.file`. The manifest
 are paying for, and nothing else — the bytes are reachable only through a
 redeemed download token. A serializer that helpfully added a `url` here would
 silently undo `core/storage.py`.
-
-Checkout takes no amount either. The total is computed from the cart on the
-server; a client that can name its own total buys a Rs 12,000 preset pack for
-one rupee.
 """
 
 from decimal import Decimal
 
+from django.core.files.storage import default_storage
 from rest_framework import serializers
 
 from apps.catalog.serializers import CategoryMiniSerializer
 from apps.marketplace.models import (
-    CartItem,
     DigitalProduct,
     Order,
     OrderItem,
@@ -77,7 +73,6 @@ class ProductListSerializer(serializers.ModelSerializer):
     type_label = serializers.CharField(source="get_product_type_display", read_only=True)
     is_owned = serializers.SerializerMethodField()
     is_wishlisted = serializers.SerializerMethodField()
-    in_cart = serializers.SerializerMethodField()
 
     class Meta:
         model = DigitalProduct
@@ -87,22 +82,19 @@ class ProductListSerializer(serializers.ModelSerializer):
             "thumbnail_url", "file_count", "total_size_mb",
             "sales_count", "avg_rating", "reviews_count",
             "seller", "category", "is_featured",
-            "is_owned", "is_wishlisted", "in_cart",
+            "is_owned", "is_wishlisted",
         )
 
     def get_thumbnail_url(self, obj) -> str | None:
         return _absolute(self.context.get("request"), obj.thumbnail)
 
-    # These three read from sets the view loaded in one query each, rather than
-    # firing a query per card. A 20-row grid would otherwise cost 60 extra.
+    # These two read from sets the view loaded in one query each, rather than
+    # firing a query per card. A 20-row grid would otherwise cost 40 extra.
     def get_is_owned(self, obj) -> bool:
         return obj.pk in (self.context.get("owned_ids") or set())
 
     def get_is_wishlisted(self, obj) -> bool:
         return obj.pk in (self.context.get("wishlisted_ids") or set())
-
-    def get_in_cart(self, obj) -> bool:
-        return obj.pk in (self.context.get("cart_ids") or set())
 
 
 class ProductDetailSerializer(ProductListSerializer):
@@ -111,7 +103,7 @@ class ProductDetailSerializer(ProductListSerializer):
 
     class Meta(ProductListSerializer.Meta):
         fields = ProductListSerializer.Meta.fields + (
-            "description", "compatible_with", "tags",
+            "description", "address", "compatible_with", "tags",
             "preview_images", "preview_image_urls", "preview_video_url",
             "files", "view_count", "wishlist_count", "published_at",
         )
@@ -134,41 +126,6 @@ class ProductDetailSerializer(ProductListSerializer):
             relative = f"{settings.MEDIA_URL}{str(path).lstrip('/')}"
             urls.append(request.build_absolute_uri(relative) if request else relative)
         return urls
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# CART
-# ═══════════════════════════════════════════════════════════════════════════
-class CartItemSerializer(serializers.ModelSerializer):
-    product = ProductListSerializer(read_only=True)
-    #: Set by `selectors.cart_summary` — why this line cannot be checked out.
-    is_available = serializers.BooleanField(read_only=True, default=True)
-    is_owned = serializers.BooleanField(read_only=True, default=False)
-
-    class Meta:
-        model = CartItem
-        fields = ("id", "product", "is_available", "is_owned", "created_at")
-
-
-class CartSerializer(serializers.Serializer):
-    items = CartItemSerializer(many=True, read_only=True)
-    count = serializers.IntegerField(read_only=True)
-    subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
-    total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
-    unavailable_count = serializers.IntegerField(read_only=True)
-    can_checkout = serializers.SerializerMethodField()
-
-    def get_can_checkout(self, obj) -> bool:
-        return bool(
-            obj["count"] > 0
-            and obj["unavailable_count"] == 0
-        )
-
-
-class AddToCartSerializer(serializers.Serializer):
-    product = serializers.PrimaryKeyRelatedField(
-        queryset=DigitalProduct.objects.filter(is_published=True, is_approved=True)
-    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -217,46 +174,6 @@ class OrderSerializer(serializers.ModelSerializer):
         return obj.items.count()
 
 
-class CheckoutSerializer(serializers.Serializer):
-    """
-    Cash on delivery: where to deliver, and a phone to call. Both required.
-
-    Still intentionally empty of money — the cart is the source of truth for
-    what is being bought and what it costs. An `Idempotency-Key` header makes
-    a retry safe.
-    """
-
-    delivery_address = serializers.CharField(
-        min_length=10, max_length=500,
-        error_messages={
-            "required": "Enter your delivery address.",
-            "blank": "Enter your delivery address.",
-            "min_length": "Enter your full delivery address (house, street, area, city).",
-        },
-    )
-    delivery_phone = serializers.CharField(
-        max_length=20,
-        error_messages={
-            "required": "Enter a phone number for delivery.",
-            "blank": "Enter a phone number for delivery.",
-        },
-    )
-
-    def validate_delivery_address(self, value: str) -> str:
-        return value.strip()
-
-    def validate_delivery_phone(self, value: str) -> str:
-        """An 11-digit Pakistani mobile number, e.g. 03001234567."""
-        import re
-
-        cleaned = value.strip().replace(" ", "").replace("-", "")
-        if not re.fullmatch(r"03\d{9}", cleaned):
-            raise serializers.ValidationError(
-                "Enter an 11-digit Pakistani mobile number, e.g. 03001234567."
-            )
-        return cleaned
-
-
 class DownloadRequestSerializer(serializers.Serializer):
     file = serializers.IntegerField(
         required=False,
@@ -288,6 +205,29 @@ class SellerProductSerializer(ProductListSerializer):
         )
 
 
+class SellerProductDetailSerializer(SellerProductSerializer):
+    """Everything the seller's edit form needs, with a handle per photo."""
+
+    photos = serializers.SerializerMethodField()
+
+    class Meta(SellerProductSerializer.Meta):
+        fields = SellerProductSerializer.Meta.fields + (
+            "description", "address", "photos",
+        )
+
+    def get_photos(self, obj) -> list[dict]:
+        from apps.marketplace.services import listing_photos
+
+        request = self.context.get("request")
+        rows = []
+        for path in listing_photos(obj):
+            url = default_storage.url(path)
+            rows.append(
+                {"path": path, "url": request.build_absolute_uri(url) if request else url}
+            )
+        return rows
+
+
 class SellerProductCreateSerializer(serializers.Serializer):
     """A new listing from the Sell screen: photos, details and a price."""
 
@@ -300,6 +240,14 @@ class SellerProductCreateSerializer(serializers.Serializer):
     )
     product_type = serializers.ChoiceField(
         choices=DigitalProduct._meta.get_field("product_type").choices
+    )
+    address = serializers.CharField(
+        min_length=5, max_length=300,
+        error_messages={
+            "required": "Enter the address of the product.",
+            "blank": "Enter the address of the product.",
+            "min_length": "Enter the area and city of the product.",
+        },
     )
     photos = serializers.ListField(
         child=serializers.ImageField(),
@@ -320,6 +268,33 @@ class SellerProductCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError(exc.messages) from exc
             photo.seek(0)
         return photos
+
+
+class SellerProductUpdateSerializer(SellerProductCreateSerializer):
+    """The whole ad again: existing photos to keep, plus any new ones."""
+
+    keep_photos = serializers.ListField(
+        child=serializers.CharField(max_length=300),
+        required=False, default=list,
+        max_length=SellerProductCreateSerializer.MAX_PHOTOS,
+    )
+    photos = serializers.ListField(
+        child=serializers.ImageField(),
+        required=False, default=list,
+        max_length=SellerProductCreateSerializer.MAX_PHOTOS,
+    )
+
+    def validate(self, attrs):
+        total = len(attrs["keep_photos"]) + len(attrs["photos"])
+        if total < 1:
+            raise serializers.ValidationError(
+                {"photos": "Add at least one photo of the product."}
+            )
+        if total > self.MAX_PHOTOS:
+            raise serializers.ValidationError(
+                {"photos": f"An ad can have up to {self.MAX_PHOTOS} photos."}
+            )
+        return attrs
 
 
 class SellerSummarySerializer(serializers.Serializer):

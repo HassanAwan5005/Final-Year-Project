@@ -60,7 +60,12 @@ export const chatApi = {
    * Idempotent by design: 201 means it was created, 200 means it already
    * existed. Either way the caller gets the thread it asked for.
    */
-  start(payload: { user: number; booking?: number | null; message?: string }) {
+  start(payload: {
+    user: number;
+    booking?: number | null;
+    product?: number | null;
+    message?: string;
+  }) {
     return unwrap<ConversationDetail>(api.post(ENDPOINTS.chat.conversations, payload));
   },
 
@@ -116,8 +121,14 @@ export const chatApi = {
     return unwrap<Message>(api.patch(ENDPOINTS.chat.message(messageId), { body }));
   },
 
+  /** Delete for everyone. */
   async remove(messageId: number): Promise<void> {
     await api.delete(ENDPOINTS.chat.message(messageId));
+  },
+
+  /** Delete for me: the other side keeps the message. */
+  async removeForMe(messageId: number): Promise<void> {
+    await api.post(ENDPOINTS.chat.deleteMessageForMe(messageId), {});
   },
 
   report(messageId: number, reason: string, detail = '') {

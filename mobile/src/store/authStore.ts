@@ -27,12 +27,17 @@ interface AuthState {
   /** True until the initial "am I already signed in?" check completes. */
   isBootstrapping: boolean;
   isAuthenticated: boolean;
-  /** True from sign-up until the code is entered or the user chooses "later". */
+  /** Email of an account just created here that has not signed in yet. */
+  newAccountEmail: string | null;
+  /**
+   * True from the first sign-in after sign-up until the code is entered or the
+   * user chooses "later".
+   */
   isVerifyPending: boolean;
 
   bootstrap: () => Promise<void>;
   login: (email: string, password: string) => Promise<User>;
-  register: (payload: RegisterPayload) => Promise<User>;
+  register: (payload: RegisterPayload) => Promise<void>;
   logout: (allDevices?: boolean) => Promise<void>;
   setUser: (user: User) => void;
   finishVerify: () => void;
@@ -53,6 +58,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   isBootstrapping: true,
   isAuthenticated: false,
+  newAccountEmail: null,
   isVerifyPending: false,
 
   /**
@@ -80,24 +86,30 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   login: async (email, password) => {
+    const normalizedEmail = email.trim().toLowerCase();
     const result = await unwrap<AuthResponse>(
-      api.post(ENDPOINTS.auth.login, { email: email.trim().toLowerCase(), password }),
+      api.post(ENDPOINTS.auth.login, { email: normalizedEmail, password }),
     );
     await tokenStorage.set(result.tokens.access, result.tokens.refresh);
-    set({ user: result.user, isAuthenticated: true });
+    set({
+      user: result.user,
+      isAuthenticated: true,
+      isVerifyPending: get().newAccountEmail === normalizedEmail,
+      newAccountEmail: null,
+    });
     return result.user;
   },
 
+  /**
+   * Creates the account only. The tokens in the response are deliberately not
+   * kept: a new user signs in on the login screen.
+   */
   register: async (payload) => {
-    const result = await unwrap<AuthResponse>(
-      api.post(ENDPOINTS.auth.register, {
-        ...payload,
-        email: payload.email.trim().toLowerCase(),
-      }),
+    const email = payload.email.trim().toLowerCase();
+    await unwrap<AuthResponse>(
+      api.post(ENDPOINTS.auth.register, { ...payload, email }),
     );
-    await tokenStorage.set(result.tokens.access, result.tokens.refresh);
-    set({ user: result.user, isAuthenticated: true, isVerifyPending: true });
-    return result.user;
+    set({ newAccountEmail: email });
   },
 
   logout: async (allDevices = false) => {

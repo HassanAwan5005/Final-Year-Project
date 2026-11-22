@@ -104,6 +104,35 @@ def _extract_target_date(text: str) -> tuple[date | None, str | None]:
     return None, None
 
 
+def _product_replies(product, for_user, last_msg) -> list[dict[str, Any]]:
+    """Quick replies for a thread about a shop product."""
+    if last_msg is not None and last_msg.sender_id == for_user.id:
+        texts = ["Looking forward to hearing from you!"]
+    elif product.seller_id == for_user.id:
+        texts = [
+            "Yes, it is still available.",
+            "The price is slightly negotiable.",
+            "You can come and check it in person.",
+            "Sorry, it has been sold.",
+        ]
+    elif last_msg is None:
+        texts = [
+            "Hi! Is this still available?",
+            "What is your final price?",
+            "Can I check it in person before buying?",
+        ]
+    else:
+        texts = [
+            "What is your final price?",
+            "What condition is it in?",
+            "Where can we meet?",
+            "Deal! When can I pick it up?",
+        ]
+    return [
+        {"text": text, "category": "product", "confidence": 0.9} for text in texts
+    ]
+
+
 def generate_smart_replies(conversation, for_user, limit: int = 4) -> list[dict[str, Any]]:
     """
     Generate dynamic smart-reply suggestions for the conversation.
@@ -114,9 +143,14 @@ def generate_smart_replies(conversation, for_user, limit: int = 4) -> list[dict[
     # Fetch last message in the thread
     last_msg = (
         Message.objects.filter(conversation=conversation, is_deleted=False)
+        .exclude(deleted_for=for_user)
         .order_by("-created_at")
         .first()
     )
+
+    # A thread about a shop product is a sale, not a shoot.
+    if conversation.product_id and not conversation.booking_id:
+        return _product_replies(conversation.product, for_user, last_msg)[:limit]
 
     # Determine role
     photographer = getattr(for_user, "photographer_profile", None)

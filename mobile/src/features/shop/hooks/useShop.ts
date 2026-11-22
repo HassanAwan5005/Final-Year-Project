@@ -1,14 +1,5 @@
 /**
  * React Query hooks for the shop, profile and wishlist.
- *
- * WHAT A PURCHASE INVALIDATES
- * ---------------------------
- * Buying (cash on delivery) touches four things a user can see at once: the
- * cart (now empty), the purchases library (now larger), the orders list, and
- * the product grid (those cards are now "Owned"). Invalidating only
- * the cart leaves a Buy button on something the buyer already owns, which
- * then errors — so the mutations below clear whole key prefixes rather than
- * naming individual queries.
  */
 
 import {
@@ -24,9 +15,9 @@ import {
   profileApi,
   shopApi,
   wishlistApi,
-  type CheckoutDelivery,
   type CreateListingPayload,
   type ShopFilters,
+  type UpdateListingPayload,
 } from '../../../api/services/shop.api';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -68,60 +59,8 @@ export function useFeaturedProducts() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CART
+// PAST PURCHASES
 // ═══════════════════════════════════════════════════════════════════════════
-export function useCart() {
-  return useQuery({
-    queryKey: qk.shop.cart,
-    queryFn: () => shopApi.cart(),
-    staleTime: 15_000,
-  });
-}
-
-function useCartMutation<TArgs>(fn: (args: TArgs) => Promise<unknown>) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: fn,
-    onSuccess: (cart) => {
-      // The response IS the new cart, so seed it rather than refetching.
-      queryClient.setQueryData(qk.shop.cart, cart);
-      // The grid's `in_cart` flags are now stale.
-      queryClient.invalidateQueries({ queryKey: qk.shop.list({}) , exact: false });
-    },
-    retry: false,
-  });
-}
-
-export function useAddToCart() {
-  return useCartMutation((productId: number) => shopApi.addToCart(productId));
-}
-
-export function useRemoveFromCart() {
-  return useCartMutation((productId: number) => shopApi.removeFromCart(productId));
-}
-
-export function useClearCart() {
-  return useCartMutation(() => shopApi.clearCart());
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PURCHASE
-// ═══════════════════════════════════════════════════════════════════════════
-export function useCheckout() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (delivery: CheckoutDelivery) => shopApi.checkout(delivery),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.shop.all });
-      queryClient.invalidateQueries({ queryKey: qk.profile.all });
-    },
-    // Deliberately no retry: an automatic replay of a payment is not
-    // something a library should decide. The Idempotency-Key makes a
-    // *user-initiated* retry safe, which is the right place for that choice.
-    retry: false,
-  });
-}
-
 export function usePurchases() {
   return useQuery({
     queryKey: qk.shop.purchases,
@@ -166,6 +105,30 @@ export function useSellerSummary() {
     queryKey: qk.shop.sellerSummary,
     queryFn: () => shopApi.sellerSummary(),
     staleTime: 60_000,
+  });
+}
+
+/** Always refetched on open: the edit form must start from the latest ad. */
+export function useSellerProduct(id: number) {
+  return useQuery({
+    queryKey: qk.shop.sellerProduct(id),
+    queryFn: () => shopApi.sellerProduct(id),
+    staleTime: 0,
+  });
+}
+
+export function useUpdateListing() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: UpdateListingPayload) => shopApi.updateListing(payload),
+    onSuccess: () => {
+      // The ad shows in the grid, its own page, My listings, Saved and chats.
+      queryClient.invalidateQueries({ queryKey: qk.shop.all });
+      queryClient.invalidateQueries({ queryKey: qk.wishlist });
+      queryClient.invalidateQueries({ queryKey: qk.chat.all });
+    },
+    // A retry would upload the new photos twice.
+    retry: false,
   });
 }
 

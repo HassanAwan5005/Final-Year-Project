@@ -1,22 +1,16 @@
 /**
  * Shop, profile and wishlist API.
  *
- * TWO THINGS THIS FILE NEVER SENDS
- * -------------------------------
- * 1. A price. `checkout()` posts only the delivery details (cash on
- *    delivery) — the server totals the cart
- *    itself. A client that could name its own total buys a Rs 12,000 preset
- *    pack for one rupee, and no amount of later validation is as reliable as
- *    simply never reading the number.
- * 2. A file path. Product bytes are fetched by redeeming a single-use ticket
- *    from `requestDownload()`, never from a URL in the product payload.
+ * The shop is a classifieds board: sellers post ads and buyers message them.
+ * There is no cart or checkout. A file path is never sent either — product
+ * bytes from past orders are fetched by redeeming a single-use ticket from
+ * `requestDownload()`, never from a URL in the product payload.
  */
 
 import { api, unwrap, unwrapFull } from '../client';
 import { ENDPOINTS } from '../config';
 import type {
   BuyerProfile,
-  Cart,
   DigitalProduct,
   DigitalProductDetail,
   DownloadTicket,
@@ -24,6 +18,7 @@ import type {
   OrderItem,
   PhotographerSelfProfile,
   SellerProduct,
+  SellerProductDetail,
   SellerSummary,
   ShopFilterOptions,
   User,
@@ -59,11 +54,6 @@ function clean(filters: object): Record<string, string> {
   return out;
 }
 
-/** Unique per submit attempt — Hermes has no `crypto.randomUUID`. */
-function idempotencyKey(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
 export const shopApi = {
   async list(filters: ShopFilters = {}): Promise<ProductPage> {
     const envelope = await unwrapFull<DigitalProduct[]>(
@@ -92,40 +82,7 @@ export const shopApi = {
     return unwrap<DigitalProduct[]>(api.get(ENDPOINTS.marketplace.bestsellers));
   },
 
-  // ─── Cart ────────────────────────────────────────────────────────────────
-  // Every mutation returns the whole cart, so the screen re-renders from one
-  // authoritative payload instead of patching a local copy and hoping the two
-  // agree about the total.
-  cart() {
-    return unwrap<Cart>(api.get(ENDPOINTS.marketplace.cart));
-  },
-
-  addToCart(productId: number) {
-    return unwrap<Cart>(
-      api.post(ENDPOINTS.marketplace.cartAdd, { product: productId }),
-    );
-  },
-
-  removeFromCart(productId: number) {
-    return unwrap<Cart>(api.post(ENDPOINTS.marketplace.cartRemove(productId), {}));
-  },
-
-  clearCart() {
-    return unwrap<Cart>(api.post(ENDPOINTS.marketplace.cartClear, {}));
-  },
-
-  // ─── Orders ──────────────────────────────────────────────────────────────
-  /** Cash on delivery: the delivery address and phone are required. */
-  checkout(delivery: CheckoutDelivery, key = idempotencyKey('ord')) {
-    return unwrap<Order>(
-      api.post(
-        ENDPOINTS.marketplace.checkout,
-        delivery,
-        { headers: { 'Idempotency-Key': key } },
-      ),
-    );
-  },
-
+  // ─── Past orders ─────────────────────────────────────────────────────────
   orders() {
     return unwrap<Order[]>(api.get(ENDPOINTS.marketplace.orders));
   },
@@ -160,32 +117,48 @@ export const shopApi = {
     return unwrap<SellerSummary>(api.get(ENDPOINTS.marketplace.sellerSummary));
   },
 
+  /** One of the caller's own ads, including its photos and address. */
+  sellerProduct(id: number) {
+    return unwrap<SellerProductDetail>(api.get(ENDPOINTS.marketplace.sellerProduct(id)));
+  },
+
   /** List a product for sale (buyers and photographers). Sent as multipart. */
   createListing(payload: CreateListingPayload) {
-    const form = new FormData();
-    form.append('title', payload.title);
-    form.append('description', payload.description);
-    form.append('price', String(payload.price));
-    form.append('product_type', payload.product_type);
-    payload.photos.forEach((photo, index) => {
-      // React Native's FormData wants this exact triple.
-      form.append('photos', {
-        uri: photo.uri,
-        name: photo.name ?? `product-${index + 1}.jpg`,
-        type: photo.type ?? 'image/jpeg',
-      } as unknown as Blob);
-    });
     return unwrap<SellerProduct>(
-      api.post(ENDPOINTS.marketplace.sellerProducts, form, {
+      api.post(ENDPOINTS.marketplace.sellerProducts, listingForm(payload), {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }),
+    );
+  },
+
+  /** Edit the whole ad. Photos not in `keep_photos` are removed. */
+  updateListing({ id, keep_photos, ...payload }: UpdateListingPayload) {
+    const form = listingForm(payload);
+    keep_photos.forEach((path) => form.append('keep_photos', path));
+    return unwrap<SellerProductDetail>(
+      api.patch(ENDPOINTS.marketplace.sellerProduct(id), form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       }),
     );
   },
 };
 
-export interface CheckoutDelivery {
-  delivery_address: string;
-  delivery_phone: string;
+function listingForm(payload: CreateListingPayload): FormData {
+  const form = new FormData();
+  form.append('title', payload.title);
+  form.append('description', payload.description);
+  form.append('price', String(payload.price));
+  form.append('product_type', payload.product_type);
+  form.append('address', payload.address);
+  payload.photos.forEach((photo, index) => {
+    // React Native's FormData wants this exact triple.
+    form.append('photos', {
+      uri: photo.uri,
+      name: photo.name ?? `product-${index + 1}.jpg`,
+      type: photo.type ?? 'image/jpeg',
+    } as unknown as Blob);
+  });
+  return form;
 }
 
 export interface CreateListingPayload {
@@ -193,7 +166,14 @@ export interface CreateListingPayload {
   description: string;
   price: number;
   product_type: string;
+  address: string;
   photos: { uri: string; name?: string; type?: string }[];
+}
+
+export interface UpdateListingPayload extends CreateListingPayload {
+  id: number;
+  /** Existing photos to keep, in order; new `photos` go after them. */
+  keep_photos: string[];
 }
 
 export const profileApi = {

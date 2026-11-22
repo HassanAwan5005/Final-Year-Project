@@ -38,10 +38,10 @@ export const qk = {
     detail: (slug: string) => ['shop', 'detail', slug] as const,
     filterOptions: ['shop', 'filter-options'] as const,
     featured: ['shop', 'featured'] as const,
-    cart: ['shop', 'cart'] as const,
     orders: ['shop', 'orders'] as const,
     purchases: ['shop', 'purchases'] as const,
     sellerProducts: ['shop', 'seller', 'products'] as const,
+    sellerProduct: (id: number) => ['shop', 'seller', 'product', id] as const,
     sellerSummary: ['shop', 'seller', 'summary'] as const,
   },
 

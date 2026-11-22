@@ -74,6 +74,10 @@ class DigitalProduct(UUIDModel, BaseModel):
         max_digits=5, decimal_places=2, default=Decimal("15.00")
     )
 
+    # Where the item is. Required on every new or edited listing; blank only on
+    # listings that predate the field.
+    address = models.CharField(max_length=300, blank=True, default="")
+
     # ─── Public preview assets (these ARE served publicly, by design) ────────
     thumbnail = models.ImageField(upload_to=upload_to("products/thumbs"))
     preview_images = models.JSONField(default=list, blank=True)

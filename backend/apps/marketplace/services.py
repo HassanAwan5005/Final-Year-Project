@@ -1,22 +1,12 @@
 """
 Marketplace write logic — Module 8.
 
-WHY THERE IS NO PAYMENT GATEWAY HERE
-------------------------------------
-The app does not take online payments. Every purchase is CASH ON DELIVERY:
-the buyer gives a delivery address and phone number at checkout, the seller
-is notified with them, delivers, and collects the cash. No wallet balance is
-needed to buy and none is debited or credited.
-
-WHAT CHECKOUT GUARANTEES
-------------------------
-1. ALL OR NOTHING. The order, its items and the cart clean-up happen in ONE
-   `transaction.atomic()`.
-2. A DELIVERY ADDRESS AND PHONE ARE REQUIRED for every order.
-3. PRICES ARE SNAPSHOTTED onto OrderItem. An order is a receipt, and a receipt
-   that changes when the seller edits their listing is not a receipt.
-4. RETRIES ARE SAFE. `Order.idempotency_key` is uniquely constrained per
-   buyer, so a double-tap on Checkout cannot produce two orders.
+BUYING HAPPENS IN CHAT, NOT HERE
+--------------------------------
+The shop is a classifieds board: a seller posts an ad, an interested buyer
+messages them from the product page, and the two agree a deal in chat. There
+is no cart, no checkout and no payment. Orders placed before that change stay
+in the database so their downloads and reviews keep working.
 
 THE DOWNLOAD FLOW
 -----------------
@@ -30,230 +20,22 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import timedelta
-from decimal import Decimal
 
 from django.conf import settings
-from django.db import IntegrityError, transaction
+from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.core.exceptions import BusinessRuleViolation, ResourceGone
 from apps.marketplace.models import (
-    CartItem,
     DigitalProduct,
     DownloadToken,
-    Order,
     OrderItem,
     OrderStatus,
     ProductFile,
 )
 
 logger = logging.getLogger("snapsphere")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# CART
-# ═══════════════════════════════════════════════════════════════════════════
-def add_to_cart(user, product: DigitalProduct) -> CartItem:
-    """
-    Put a product in the basket.
-
-    Refuses what checkout would refuse anyway — an unavailable product, your
-    own listing, something you already own — because finding out at the cart
-    screen is much cheaper than finding out at checkout with a full basket.
-    """
-    _assert_buyer(user)
-    _assert_purchasable(product)
-
-    if product.seller_id == user.id:
-        raise BusinessRuleViolation("This is your own product.")
-
-    from apps.marketplace.selectors import owns_product
-
-    if owns_product(user, product):
-        raise BusinessRuleViolation(
-            "You already own this. Find it in Purchases to download it again."
-        )
-
-    item, created = CartItem.objects.get_or_create(user=user, product=product)
-    if not created:
-        # Adding twice is not an error — a digital product has no quantity, so
-        # the second tap simply means "yes, it is in the cart".
-        logger.debug("Cart item already present", extra={"product_id": product.pk})
-    return item
-
-
-def remove_from_cart(user, product_id: int) -> int:
-    deleted, _ = CartItem.objects.filter(user=user, product_id=product_id).delete()
-    return deleted
-
-
-def clear_cart(user) -> int:
-    deleted, _ = CartItem.objects.filter(user=user).delete()
-    return deleted
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# CHECKOUT
-# ═══════════════════════════════════════════════════════════════════════════
-def checkout(
-    user,
-    *,
-    delivery_address: str,
-    delivery_phone: str,
-    idempotency_key: str = "",
-) -> Order:
-    """
-    Turn the cart into a confirmed cash-on-delivery order.
-
-    No money moves in the app: the buyer pays the seller in cash on delivery,
-    so there is no wallet debit and no seller credit. Everything below the
-    `atomic()` either all happens or none of it does.
-    """
-    _assert_buyer(user)
-
-    if idempotency_key:
-        existing = Order.objects.filter(
-            buyer=user, idempotency_key=idempotency_key
-        ).first()
-        if existing is not None:
-            logger.info("Idempotent replay of order %s", existing.pk)
-            return existing
-
-    try:
-        return _checkout_atomic(
-            user, idempotency_key, delivery_address.strip(), delivery_phone.strip()
-        )
-    except IntegrityError as exc:
-        # Two genuinely simultaneous submits: the unique constraint caught the
-        # loser. Return the winner's order rather than an error — the buyer
-        # asked for one purchase and got exactly one.
-        if "uniq_order_idempotency" in str(exc) and idempotency_key:
-            existing = Order.objects.filter(
-                buyer=user, idempotency_key=idempotency_key
-            ).first()
-            if existing is not None:
-                return existing
-        raise
-
-
-@transaction.atomic
-def _checkout_atomic(
-    user, idempotency_key: str, delivery_address: str, delivery_phone: str
-) -> Order:
-    from apps.marketplace.selectors import owned_product_ids
-
-    items = list(
-        CartItem.objects.select_for_update()
-        .filter(user=user)
-        .select_related("product", "product__seller")
-    )
-    if not items:
-        raise BusinessRuleViolation("Your cart is empty.")
-    if not delivery_address or not delivery_phone:
-        raise BusinessRuleViolation("A delivery address and phone number are required.")
-
-    owned = owned_product_ids(user)
-    purchasable = []
-    for item in items:
-        product = item.product
-        if product.pk in owned:
-            raise BusinessRuleViolation(
-                f'You already own "{product.title}". Remove it from your cart to continue.'
-            )
-        if not product.is_purchasable:
-            raise ResourceGone(
-                f'"{product.title}" is no longer on sale. Remove it to continue.'
-            )
-        purchasable.append(product)
-
-    subtotal = sum((p.price for p in purchasable), Decimal("0.00"))
-
-    order = Order.objects.create(
-        buyer=user,
-        subtotal=subtotal,
-        discount=Decimal("0.00"),
-        total=subtotal,
-        status=OrderStatus.PENDING,
-        payment_method="COD",
-        delivery_address=delivery_address,
-        delivery_phone=delivery_phone,
-        idempotency_key=idempotency_key,
-    )
-
-    order_items = []
-    for product in purchasable:
-        commission = (product.price * product.commission_percent / Decimal("100")).quantize(
-            Decimal("0.01")
-        )
-        order_items.append(
-            OrderItem(
-                order=order,
-                product=product,
-                seller=product.seller,
-                product_title=product.title,
-                price=product.price,
-                commission_amount=commission,
-                seller_earning=product.price - commission,
-                max_downloads=settings.MAX_DOWNLOADS_PER_PURCHASE,
-            )
-        )
-    OrderItem.objects.bulk_create(order_items)
-
-    # Cash on delivery: PAID here means "order confirmed". The buyer pays the
-    # seller in cash on delivery, so no wallet is debited or credited.
-    order.status = OrderStatus.PAID
-    order.paid_at = timezone.now()
-    order.save(update_fields=["status", "paid_at", "updated_at"])
-
-    _bump_product_metrics(order_items)
-
-    CartItem.objects.filter(user=user).delete()
-
-    _notify_sellers(order_items, user, order)
-
-    logger.info(
-        "Order placed (cash on delivery)",
-        extra={"order_id": order.pk, "buyer_id": user.id, "total": str(subtotal)},
-    )
-    return order
-
-
-def _bump_product_metrics(order_items) -> None:
-    """F() expressions — two buyers purchasing at once must not lose a count."""
-    from django.db.models import F
-
-    from apps.profiles.models import PhotographerProfile
-
-    for item in order_items:
-        DigitalProduct.objects.filter(pk=item.product_id).update(
-            sales_count=F("sales_count") + 1,
-            total_revenue=F("total_revenue") + item.price,
-        )
-        # Only photographer sellers keep a lifetime earnings counter.
-        PhotographerProfile.objects.filter(user_id=item.seller_id).update(
-            total_earnings=F("total_earnings") + item.seller_earning
-        )
-
-
-def _notify_sellers(order_items, buyer, order) -> None:
-    """The seller delivers and collects the cash, so they get where and who."""
-    from apps.notifications.services import notify
-
-    for item in order_items:
-        notify(
-            item.seller,
-            "PRODUCT_SOLD",
-            title="New cash-on-delivery order",
-            body=(
-                f'{buyer.full_name} ordered "{item.product_title}". '
-                f"Deliver to: {order.delivery_address[:250]}. "
-                f"Phone: {order.delivery_phone}. "
-                "Collect cash on delivery."
-            ),
-            action_screen="SellerProducts",
-            action_id=str(item.product_id),
-            actor=buyer,
-        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -331,14 +113,12 @@ def redeem_download_token(token_value: str, *, ip_address: str | None = None) ->
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# GUARDS
-# ═══════════════════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════════════════
 # SELLING
 # ═══════════════════════════════════════════════════════════════════════════
 @transaction.atomic
 def create_listing(
-    user, *, title: str, description: str, price, product_type: str, photos: list
+    user, *, title: str, description: str, price, product_type: str, address: str,
+    photos: list,
 ) -> DigitalProduct:
     """
     List a product for sale — open to buyers and photographers alike.
@@ -347,14 +127,9 @@ def create_listing(
     admin moderation queue (`is_published=True, is_approved=False`) and only
     appears in the shop once an admin approves it.
 
-    Photos are resized and re-encoded, which also strips EXIF (phone photos
-    carry GPS). The first photo becomes the thumbnail; every photo is kept as
-    a preview, stored as a storage-relative path like the seeded products.
+    The first photo becomes the thumbnail; every photo is kept as a preview,
+    stored as a storage-relative path like the seeded products.
     """
-    from django.core.files.storage import default_storage
-
-    from apps.core.utils import process_image
-
     if getattr(user, "role", None) not in ("BUYER", "PHOTOGRAPHER"):
         raise BusinessRuleViolation("Only buyer and photographer accounts can sell.")
 
@@ -364,36 +139,132 @@ def create_listing(
         description=description.strip(),
         price=price,
         product_type=product_type,
+        address=address.strip(),
         file_count=0,
         is_published=True,
         is_approved=False,
         published_at=timezone.now(),
     )
-
-    cover = photos[0]
-    cover.seek(0)
-    thumb = process_image(cover, size_key="medium")
-    product.thumbnail.save(thumb.name, thumb, save=False)
-
-    previews = []
-    for photo in photos:
-        photo.seek(0)
-        large = process_image(photo, size_key="large")
-        previews.append(default_storage.save(f"products/previews/{large.name}", large))
-    product.preview_images = previews
+    _set_cover(product, photos[0])
+    product.preview_images = [_store_photo(photo) for photo in photos]
 
     product.save()
     logger.info("Listing created", extra={"product_id": product.pk, "seller_id": user.pk})
     return product
 
 
-def _assert_buyer(user) -> None:
-    from apps.core.constants import UserRole
+def listing_photos(product: DigitalProduct) -> list[str]:
+    """The listing's photos as storage paths, cover first."""
+    if product.preview_images:
+        return [str(path) for path in product.preview_images]
+    return [product.thumbnail.name] if product.thumbnail else []
 
-    if getattr(user, "role", None) not in (UserRole.BUYER, UserRole.PHOTOGRAPHER):
-        raise BusinessRuleViolation("Sign in with a buyer account to purchase.")
+
+@transaction.atomic
+def update_listing(
+    user, product_id: int, *, title: str, description: str, price, product_type: str,
+    address: str, keep_photos: list[str], photos: list,
+) -> DigitalProduct:
+    """
+    Edit every part of your own ad, including adding and removing photos.
+
+    `keep_photos` are the existing photos to keep, in order; `photos` are new
+    uploads added after them. Anything not kept is removed.
+
+    Moderation still holds: changing only the price or address leaves a live
+    ad live, but changing what the admin judged (photos, title, description,
+    category) sends it back to the review queue. Otherwise an approved ad could
+    be swapped for anything. Editing an ad that is not live submits it again.
+    """
+    product = (
+        DigitalProduct.objects.select_for_update()
+        .filter(pk=product_id, seller=user)
+        .first()
+    )
+    if product is None:
+        raise BusinessRuleViolation("This listing is not yours.")
+
+    current = listing_photos(product)
+    if len(set(keep_photos)) != len(keep_photos) or not set(keep_photos) <= set(current):
+        raise BusinessRuleViolation(
+            "The photos of this ad have changed. Reopen it and try again."
+        )
+    paths = keep_photos + [_store_photo(photo) for photo in photos]
+    if not paths:
+        raise BusinessRuleViolation("Add at least one photo of the product.")
+
+    title = title.strip()
+    description = description.strip()
+    content_changed = (
+        paths != current
+        or title != product.title
+        or _plain(description) != _plain(product.description)
+        or product_type != product.product_type
+    )
+    needs_review = content_changed or not product.is_purchasable
+
+    old_thumbnail = product.thumbnail.name if product.thumbnail else ""
+    if not old_thumbnail or paths[0] != current[0]:
+        if keep_photos:
+            from django.core.files.storage import default_storage
+
+            with default_storage.open(paths[0], "rb") as cover:
+                _set_cover(product, cover)
+        else:
+            _set_cover(product, photos[0])
+
+    product.title = title
+    product.description = description
+    product.price = price
+    product.product_type = product_type
+    product.address = address.strip()
+    product.preview_images = paths
+    if needs_review:
+        product.is_published = True
+        product.is_approved = False
+    product.save()
+
+    removed = ({*current, old_thumbnail} - {*paths, product.thumbnail.name}) - {""}
+    transaction.on_commit(lambda: _delete_unused_photos(removed))
+
+    logger.info(
+        "Listing updated",
+        extra={"product_id": product.pk, "seller_id": user.pk, "review": needs_review},
+    )
+    return product
 
 
-def _assert_purchasable(product: DigitalProduct) -> None:
-    if product is None or not product.is_purchasable:
-        raise ResourceGone("This product is no longer available.")
+def _plain(text: str) -> str:
+    """Multipart bodies may carry CRLF line endings; they are not an edit."""
+    return text.replace("\r\n", "\n").strip()
+
+
+def _set_cover(product: DigitalProduct, photo) -> None:
+    from apps.core.utils import process_image
+
+    photo.seek(0)
+    thumb = process_image(photo, size_key="medium")
+    product.thumbnail.save(thumb.name, thumb, save=False)
+
+
+def _store_photo(photo) -> str:
+    """Resize and re-encode, which also strips EXIF (phone photos carry GPS)."""
+    from django.core.files.storage import default_storage
+
+    from apps.core.utils import process_image
+
+    photo.seek(0)
+    large = process_image(photo, size_key="large")
+    return default_storage.save(f"products/previews/{large.name}", large)
+
+
+def _delete_unused_photos(paths) -> None:
+    """Remove files no listing uses. Seeded products share preview files."""
+    from django.core.files.storage import default_storage
+
+    for path in paths:
+        in_use = DigitalProduct.all_objects.filter(
+            Q(preview_images__icontains=path.rsplit("/", 1)[-1]) | Q(thumbnail=path)
+        ).exists()
+        if not in_use:
+            default_storage.delete(path)

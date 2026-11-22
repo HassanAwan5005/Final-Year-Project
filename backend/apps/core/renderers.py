@@ -23,6 +23,11 @@ class EnvelopeJSONRenderer(JSONRenderer):
         response = renderer_context.get("response")
         request = renderer_context.get("request")
 
+        # A 204 must have no body. Android's HTTP stack treats one as a broken
+        # connection, so a delete that worked was reported as "no internet".
+        if response is not None and response.status_code == 204:
+            return b""
+
         # Errors, and anything already enveloped, pass straight through.
         if isinstance(data, dict) and "success" in data and "message" in data:
             return super().render(data, accepted_media_type, renderer_context)

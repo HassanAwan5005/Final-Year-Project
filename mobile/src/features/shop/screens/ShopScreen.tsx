@@ -20,35 +20,31 @@ import { colors, radius, spacing, typography } from '../../../theme';
 import type { DigitalProduct } from '../../../types/models';
 import { ProductCard } from '../components/ProductCard';
 import {
-  useCart,
   useProducts,
   useShopFilterOptions,
   useToggleWishlist,
 } from '../hooks/useShop';
 
 const SORTS = [
-  { value: '-popularity', label: 'Best selling' },
+  { value: '-newest', label: 'Newest' },
   { value: 'price', label: 'Price ↑' },
   { value: '-price', label: 'Price ↓' },
   { value: '-rating', label: 'Top rated' },
-  { value: '-newest', label: 'Newest' },
 ];
 
-/** The Shop grid. Every purchase is cash on delivery. */
+/** The Shop grid. Buyers message the seller from a product's page. */
 export function ShopScreen({
   onOpenProduct,
-  onOpenCart,
   onBack,
 }: {
   onOpenProduct: (slug: string) => void;
-  onOpenCart: () => void;
   /** Shown when the grid is opened from the Shop tab's Buy / Sell page. */
   onBack?: () => void;
 }) {
   const { width } = useWindowDimensions();
   const [search, setSearch] = useState('');
   const [type, setType] = useState<string | null>(null);
-  const [ordering, setOrdering] = useState('-popularity');
+  const [ordering, setOrdering] = useState('-newest');
 
   const debounced = useDebounce(search, 350);
 
@@ -63,7 +59,6 @@ export function ShopScreen({
 
   const products = useProducts(filters);
   const options = useShopFilterOptions();
-  const cart = useCart();
   const toggleSave = useToggleWishlist();
 
   const rows: DigitalProduct[] =
@@ -85,19 +80,6 @@ export function ShopScreen({
           <Text style={styles.title}>Shop</Text>
           <Text style={styles.subtitle}>Camera Gear, Mobile Accessories & Presets</Text>
         </View>
-
-        <Pressable
-          onPress={onOpenCart}
-          style={styles.cartButton}
-          accessibilityLabel={`Cart, ${cart.data?.count ?? 0} items`}
-        >
-          <Ionicons name="cart-outline" size={22} color={colors.text} />
-          {cart.data?.count ? (
-            <View style={styles.cartBadge}>
-              <Text style={styles.cartBadgeText}>{cart.data.count}</Text>
-            </View>
-          ) : null}
-        </Pressable>
       </View>
 
       <View style={styles.searchWrap}>
@@ -240,29 +222,6 @@ const styles = StyleSheet.create({
   headerText: { flex: 1 },
   title: { ...typography.h1, color: colors.text },
   subtitle: { ...typography.caption, color: colors.sub },
-  cartButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cartBadge: {
-    position: 'absolute',
-    top: -2,
-    right: -2,
-    minWidth: 18,
-    height: 18,
-    paddingHorizontal: 4,
-    borderRadius: 9,
-    backgroundColor: colors.gold,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cartBadgeText: { ...typography.tiny, color: colors.bg, fontWeight: '700' },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',

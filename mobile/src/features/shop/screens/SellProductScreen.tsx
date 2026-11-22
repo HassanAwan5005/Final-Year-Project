@@ -18,9 +18,18 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ApiError } from '../../../api/client';
 import { Button } from '../../../components/ui/Button';
 import { colors, radius, spacing, typography } from '../../../theme';
-import { useCreateListing } from '../hooks/useShop';
+import type { SellerProductDetail } from '../../../types/models';
+import { useCreateListing, useUpdateListing } from '../hooks/useShop';
 
 const MAX_PHOTOS = 5;
+const MIN_ADDRESS = 5;
+
+/** A photo already on the ad (`path`) or one just picked (`asset`). */
+interface FormPhoto {
+  uri: string;
+  path?: string;
+  asset?: ImagePicker.ImagePickerAsset;
+}
 
 /** Mirrors the backend's ProductType choices. */
 const PRODUCT_TYPES = [
@@ -35,24 +44,35 @@ const PRODUCT_TYPES = [
 /**
  * The Sell form — open to buyers and photographers.
  *
- * Asks for the product photos and a description (plus a title, category and
- * price, which every listing in the shop needs). The listing goes to the admin
- * review queue and appears in the shop once approved.
+ * Asks for the product photos and a description (plus a title, category, price
+ * and address, which every listing in the shop needs). The listing goes to the
+ * admin review queue and appears in the shop once approved.
+ *
+ * With a `listing` it edits that ad instead, photos included.
  */
 export function SellProductScreen({
+  listing,
   onBack,
   onSubmitted,
 }: {
+  listing?: SellerProductDetail;
   onBack: () => void;
   onSubmitted: () => void;
 }) {
-  const [photos, setPhotos] = useState<ImagePicker.ImagePickerAsset[]>([]);
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [price, setPrice] = useState('');
-  const [productType, setProductType] = useState<string | null>(null);
+  const [photos, setPhotos] = useState<FormPhoto[]>(
+    () => listing?.photos.map(({ path, url }) => ({ uri: url, path })) ?? [],
+  );
+  const [title, setTitle] = useState(listing?.title ?? '');
+  const [description, setDescription] = useState(listing?.description ?? '');
+  const [price, setPrice] = useState(listing ? String(Number(listing.price)) : '');
+  const [productType, setProductType] = useState<string | null>(
+    listing?.product_type ?? null,
+  );
+  const [address, setAddress] = useState(listing?.address ?? '');
 
   const createListing = useCreateListing();
+  const updateListing = useUpdateListing();
+  const isPending = createListing.isPending || updateListing.isPending;
 
   const priceValue = Number(price);
   const problems = [
@@ -61,8 +81,9 @@ export function SellProductScreen({
     description.trim().length < 10 && 'write a description (10+ characters)',
     !productType && 'choose a category',
     !(priceValue >= 1) && 'enter a price',
+    address.trim().length < MIN_ADDRESS && 'enter the address',
   ].filter(Boolean) as string[];
-  const canSubmit = problems.length === 0 && !createListing.isPending;
+  const canSubmit = problems.length === 0 && !isPending;
 
   const pickPhotos = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -77,39 +98,76 @@ export function SellProductScreen({
       quality: 0.9,
     });
     if (!result.canceled) {
-      setPhotos((current) => [...current, ...result.assets].slice(0, MAX_PHOTOS));
+      const picked = result.assets.map((asset) => ({ uri: asset.uri, asset }));
+      setPhotos((current) => {
+        const known = new Set(current.map((photo) => photo.uri));
+        return [...current, ...picked.filter((photo) => !known.has(photo.uri))].slice(
+          0,
+          MAX_PHOTOS,
+        );
+      });
     }
   };
 
   const submit = () => {
     if (!canSubmit || !productType) return;
-    createListing.mutate(
-      {
-        title: title.trim(),
-        description: description.trim(),
-        price: priceValue,
-        product_type: productType,
-        photos: photos.map((asset) => ({
-          uri: asset.uri,
-          name: asset.fileName ?? undefined,
-          type: asset.mimeType ?? 'image/jpeg',
-        })),
-      },
-      {
-        onSuccess: () =>
-          Alert.alert(
-            'Submitted for review',
-            'Your product will appear in the shop once an admin approves it. You can track it under My listings.',
-            [{ text: 'OK', onPress: onSubmitted }],
-            { cancelable: true, onDismiss: onSubmitted },
-          ),
-        onError: (error) =>
-          Alert.alert(
-            'Could not list your product',
-            (error as ApiError)?.message ?? 'Please try again.',
-          ),
-      },
-    );
+    const payload = {
+      title: title.trim(),
+      description: description.trim(),
+      price: priceValue,
+      product_type: productType,
+      address: address.trim(),
+      photos: photos.flatMap(({ asset }) =>
+        asset
+          ? [
+              {
+                uri: asset.uri,
+                name: asset.fileName ?? undefined,
+                type: asset.mimeType ?? 'image/jpeg',
+              },
+            ]
+          : [],
+      ),
+    };
+    const done = (heading: string, detail: string) =>
+      Alert.alert(heading, detail, [{ text: 'OK', onPress: onSubmitted }], {
+        cancelable: true,
+        onDismiss: onSubmitted,
+      });
+    const onError = (error: unknown) =>
+      Alert.alert(
+        listing ? 'Could not update your ad' : 'Could not list your product',
+        (error as ApiError)?.message ?? 'Please try again.',
+      );
+
+    if (listing) {
+      updateListing.mutate(
+        {
+          ...payload,
+          id: listing.id,
+          keep_photos: photos.flatMap(({ path }) => (path ? [path] : [])),
+        },
+        {
+          onSuccess: (updated) =>
+            updated.is_published && updated.is_approved
+              ? done('Ad updated', 'Your changes are live in the shop.')
+              : done(
+                  'Submitted for review',
+                  'Your changes are saved. The ad will appear in the shop again once an admin approves it.',
+                ),
+          onError,
+        },
+      );
+      return;
+    }
+    createListing.mutate(payload, {
+      onSuccess: () =>
+        done(
+          'Submitted for review',
+          'Your product will appear in the shop once an admin approves it. You can track it under My listings.',
+        ),
+      onError,
+    });
   };
 
   return (
@@ -118,7 +176,7 @@ export function SellProductScreen({
         <Pressable onPress={onBack} hitSlop={12} accessibilityLabel="Go back">
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </Pressable>
-        <Text style={styles.headerTitle}>Sell a product</Text>
+        <Text style={styles.headerTitle}>{listing ? 'Edit ad' : 'Sell a product'}</Text>
         <View style={styles.headerSpacer} />
       </View>
 
@@ -138,9 +196,9 @@ export function SellProductScreen({
               Up to {MAX_PHOTOS}. The first photo is the cover.
             </Text>
             <View style={styles.photoRow}>
-              {photos.map((asset, index) => (
-                <View key={asset.uri} style={styles.photoWrap}>
-                  <Image source={{ uri: asset.uri }} style={styles.photo} contentFit="cover" />
+              {photos.map((photo, index) => (
+                <View key={photo.uri} style={styles.photoWrap}>
+                  <Image source={{ uri: photo.uri }} style={styles.photo} contentFit="cover" />
                   {index === 0 ? (
                     <View style={styles.coverTag}>
                       <Text style={styles.coverTagText}>Cover</Text>
@@ -151,7 +209,7 @@ export function SellProductScreen({
                     hitSlop={6}
                     accessibilityLabel={`Remove photo ${index + 1}`}
                     onPress={() =>
-                      setPhotos((current) => current.filter((p) => p.uri !== asset.uri))
+                      setPhotos((current) => current.filter((p) => p.uri !== photo.uri))
                     }
                   >
                     <Ionicons name="close" size={13} color={colors.text} />
@@ -225,24 +283,37 @@ export function SellProductScreen({
               maxLength={8}
               style={styles.input}
             />
+
+            <Text style={[styles.cardTitle, styles.spaced]}>Address</Text>
+            <TextInput
+              value={address}
+              onChangeText={setAddress}
+              placeholder="e.g. Gulberg III, Lahore"
+              placeholderTextColor={colors.dim}
+              maxLength={300}
+              style={styles.input}
+            />
+            <Text style={styles.addressHint}>Everyone who opens your ad can see this.</Text>
           </View>
 
           <Text style={styles.footnote}>
-            New listings are reviewed by our team before they appear in the shop.
+            {listing
+              ? 'Price and address changes go live right away. Other changes to the ad are reviewed by our team first.'
+              : 'New listings are reviewed by our team before they appear in the shop.'}
           </Text>
         </ScrollView>
 
         <View style={styles.bar}>
-          {problems.length && !createListing.isPending ? (
+          {problems.length && !isPending ? (
             <Text style={styles.missing} numberOfLines={2}>
-              To submit: {problems.join(', ')}.
+              {listing ? 'To save' : 'To submit'}: {problems.join(', ')}.
             </Text>
           ) : null}
           <Button
-            label="Submit for sale"
+            label={listing ? 'Save changes' : 'Submit for sale'}
             onPress={submit}
             disabled={!canSubmit}
-            loading={createListing.isPending}
+            loading={isPending}
           />
         </View>
       </KeyboardAvoidingView>
@@ -287,6 +358,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   textarea: { minHeight: 110, textAlignVertical: 'top' },
+  addressHint: { ...typography.tiny, color: colors.dim, marginTop: 4 },
   counter: { ...typography.tiny, color: colors.dim, textAlign: 'right', marginTop: 4 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   chip: {

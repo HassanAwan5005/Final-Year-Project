@@ -14,7 +14,8 @@ Chat endpoints — Module 13.
     GET    /chat/conversations/unread-count/        Messages tab badge
     GET    /chat/conversations/contacts/            who you may message
     PATCH  /chat/messages/{id}/                     edit your own
-    DELETE /chat/messages/{id}/                     withdraw your own
+    DELETE /chat/messages/{id}/                     delete your own for everyone
+    POST   /chat/messages/{id}/delete-for-me/       hide any message from yourself
     POST   /chat/messages/{id}/report/              into the moderation queue
 
 WHY REST EXISTS ALONGSIDE THE WEBSOCKET
@@ -95,6 +96,9 @@ class ConversationViewSet(
                 if link.user_id != self.request.user.id:
                     user_ids.append(link.user_id)
         context["presence"] = selectors.presence_for(user_ids)
+        context["own_previews"] = selectors.own_previews(
+            self.request.user, conversations
+        )
         return context
 
     # ─── The Messages tab ────────────────────────────────────────────────────
@@ -143,7 +147,10 @@ class ConversationViewSet(
         data = serializer.validated_data
 
         conversation, created = services.get_or_create_conversation(
-            request.user, data["user"], booking=data.get("booking")
+            request.user,
+            data["user"],
+            booking=data.get("booking"),
+            product=data.get("product"),
         )
         first_message = (data.get("message") or "").strip()
         if first_message:
@@ -181,6 +188,7 @@ class ConversationViewSet(
             before = request.query_params.get("before")
             rows = selectors.messages_in(
                 conversation,
+                request.user,
                 after=int(after) if after and after.isdigit() else None,
                 before=int(before) if before and before.isdigit() else None,
                 limit=int(request.query_params.get("limit") or 50),
@@ -300,6 +308,7 @@ class MessageViewSet(MessageResponseMixin, MultiSerializerMixin, GenericViewSet)
     success_messages = {
         "partial_update": "Message edited",
         "destroy": "Message deleted",
+        "delete_for_me": "Message deleted for you",
         "report": "Reported — our team will take a look",
     }
 
@@ -320,10 +329,16 @@ class MessageViewSet(MessageResponseMixin, MultiSerializerMixin, GenericViewSet)
             MessageSerializer(message, context=self.get_serializer_context()).data
         )
 
-    @extend_schema(summary="Withdraw your own message", responses={204: None})
+    @extend_schema(summary="Delete your own message for everyone", responses={204: None})
     def destroy(self, request, pk=None):
         services.delete_message(self._message(pk), request.user)
         return Response(status=http.HTTP_204_NO_CONTENT)
+
+    @extend_schema(summary="Delete a message for yourself only", request=None)
+    @action(detail=True, methods=["post"], url_path="delete-for-me")
+    def delete_for_me(self, request, pk=None):
+        services.delete_message_for_me(self._message(pk), request.user)
+        return Response({"deleted": True})
 
     @extend_schema(summary="Report a message", request=ReportMessageSerializer)
     @action(detail=True, methods=["post"])

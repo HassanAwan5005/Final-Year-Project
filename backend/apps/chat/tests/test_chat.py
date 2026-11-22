@@ -121,6 +121,108 @@ def test_a_buyer_cannot_message_another_buyer(buyer, other_buyer):
         services.get_or_create_conversation(buyer, other_buyer)
 
 
+@pytest.fixture
+def buyer_listing(other_buyer, second_product):
+    """A live ad posted by a buyer account."""
+    second_product.seller = other_buyer
+    second_product.save(update_fields=["seller"])
+    return second_product
+
+
+@pytest.mark.parametrize("client_fixture", ["buyer_client", "photographer_client"])
+def test_anyone_may_message_the_seller_of_a_live_product(
+    request, client_fixture, other_buyer, other_buyer_client, buyer_listing
+):
+    client = request.getfixturevalue(client_fixture)
+    response = client.post(
+        f"{URL}conversations/",
+        {"user": other_buyer.pk, "product": buyer_listing.pk},
+        format="json",
+    )
+
+    assert response.status_code == 201, response.content
+    body = response.json()["data"]
+    assert body["product"]["slug"] == buyer_listing.slug
+    assert body["product"]["is_available"] is True
+
+    # The seller sees which product it is about, and can answer.
+    row = other_buyer_client.get(f"{URL}conversations/").json()["data"][0]
+    assert row["product"]["title"] == buyer_listing.title
+    reply = other_buyer_client.post(
+        f"{URL}conversations/{body['id']}/messages/",
+        {"body": "Yes, it is still available."},
+        format="json",
+    )
+    assert reply.status_code == 201
+
+
+def test_messaging_a_seller_twice_reuses_the_thread_and_follows_the_product(
+    buyer, photographer, product, second_product
+):
+    first, created = services.get_or_create_conversation(
+        buyer, photographer.user, product=product
+    )
+    again, created_again = services.get_or_create_conversation(
+        buyer, photographer.user, product=second_product
+    )
+
+    assert (created, created_again) == (True, False)
+    assert first.pk == again.pk
+    again.refresh_from_db()
+    assert again.product_id == second_product.pk
+
+
+def test_a_product_is_not_a_pass_to_message_anyone_else(
+    buyer_client, photographer, other_buyer, product
+):
+    """The product must belong to the person being messaged."""
+    response = buyer_client.post(
+        f"{URL}conversations/",
+        {"user": other_buyer.pk, "product": product.pk},
+        format="json",
+    )
+    assert response.status_code == 400
+    assert Conversation.objects.count() == 0
+
+
+def test_a_product_that_is_not_live_opens_no_thread(
+    buyer_client, other_buyer, buyer_listing
+):
+    buyer_listing.is_approved = False
+    buyer_listing.save(update_fields=["is_approved"])
+
+    response = buyer_client.post(
+        f"{URL}conversations/",
+        {"user": other_buyer.pk, "product": buyer_listing.pk},
+        format="json",
+    )
+    assert response.status_code == 400
+
+
+def test_you_cannot_message_yourself_about_your_own_ad(
+    other_buyer_client, other_buyer, buyer_listing
+):
+    response = other_buyer_client.post(
+        f"{URL}conversations/",
+        {"user": other_buyer.pk, "product": buyer_listing.pk},
+        format="json",
+    )
+    assert response.status_code >= 400
+
+
+def test_smart_replies_in_a_product_thread_are_about_the_product(
+    buyer_client, buyer, photographer, photographer_client, product
+):
+    thread, _ = services.get_or_create_conversation(
+        buyer, photographer.user, product=product
+    )
+    url = f"{URL}conversations/{thread.pk}/smart-replies/"
+
+    assert "Hi! Is this still available?" in buyer_client.get(url).content.decode()
+    services.send_message(thread, buyer, body="Is it available?")
+    assert "Yes, it is still available." in photographer_client.get(url).content.decode()
+
+
 def test_a_blocked_account_cannot_be_messaged(buyer, photographer):
     photographer.user.block("Suspended for review")
 
@@ -492,6 +594,101 @@ def test_editing_marks_it_edited(buyer_client, thread, buyer):
 
     assert body["is_edited"] is True
     assert body["body"] == "Are you free on the 26th?"
+
+
+def test_a_delete_response_has_no_body(buyer_client, thread, buyer):
+    """
+    Android refuses a 204 that declares a body, and the app then says "no
+    internet connection" for a delete that worked.
+    """
+    message = services.send_message(thread, buyer, body="Oops")
+    response = buyer_client.delete(f"{URL}messages/{message.pk}/")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert response.headers.get("Content-Length", "0") == "0"
+
+
+def test_delete_for_everyone_blanks_it_on_both_sides(
+    buyer_client, photographer_client, thread, buyer
+):
+    message = services.send_message(thread, buyer, body="Wrong chat, sorry")
+    buyer_client.delete(f"{URL}messages/{message.pk}/")
+
+    for client in (buyer_client, photographer_client):
+        row = client.get(f"{URL}conversations/{thread.pk}/messages/").json()["data"][0]
+        assert row["is_deleted"] is True
+        assert row["body"] == "This message was deleted"
+
+
+def test_delete_for_everyone_reaches_open_phones_and_the_bell(
+    buyer_client, thread, buyer, photographer, monkeypatch,
+    django_capture_on_commit_callbacks,
+):
+    from apps.notifications.models import Notification, NotificationType
+
+    sent = []
+    monkeypatch.setattr(services, "_broadcast_deleted", lambda m: sent.append(m.pk))
+    other = services.send_message(thread, buyer, body="Keep this one")
+    message = services.send_message(thread, buyer, body="My old number")
+
+    with django_capture_on_commit_callbacks(execute=True):
+        buyer_client.delete(f"{URL}messages/{message.pk}/")
+
+    assert sent == [message.pk]
+    bodies = {
+        n.payload["message_id"]: n.body
+        for n in Notification.objects.filter(
+            recipient=photographer.user, notification_type=NotificationType.NEW_MESSAGE
+        )
+    }
+    assert bodies == {other.pk: "Keep this one", message.pk: "This message was deleted"}
+
+
+@pytest.mark.parametrize("sender_is_me", [True, False])
+def test_delete_for_me_hides_it_only_from_me(
+    buyer_client, photographer_client, thread, buyer, photographer, sender_is_me
+):
+    sender = buyer if sender_is_me else photographer.user
+    services.send_message(thread, sender, body="First")
+    message = services.send_message(thread, sender, body="Second")
+
+    url = f"{URL}messages/{message.pk}/delete-for-me/"
+    assert buyer_client.post(url).status_code == 200
+    assert buyer_client.post(url).status_code == 200  # a retry is harmless
+
+    def bodies(client, query=""):
+        rows = client.get(f"{URL}conversations/{thread.pk}/messages/{query}").json()["data"]
+        return [row["body"] for row in rows]
+
+    assert bodies(buyer_client) == ["First"]
+    assert bodies(buyer_client, f"?after={message.pk - 1}") == []
+    assert bodies(photographer_client) == ["First", "Second"]
+
+
+def test_delete_for_me_updates_only_my_preview(
+    buyer_client, photographer_client, thread, buyer
+):
+    first = services.send_message(thread, buyer, body="First")
+    second = services.send_message(thread, buyer, body="Second")
+
+    def preview(client):
+        return client.get(f"{URL}conversations/").json()["data"][0]["last_message_text"]
+
+    buyer_client.post(f"{URL}messages/{second.pk}/delete-for-me/")
+    assert preview(buyer_client) == "First"
+    assert preview(photographer_client) == "Second"
+
+    buyer_client.post(f"{URL}messages/{first.pk}/delete-for-me/")
+    assert preview(buyer_client) == ""
+
+
+def test_a_stranger_cannot_delete_for_me(other_buyer_client, thread, buyer):
+    message = services.send_message(thread, buyer, body="Private")
+    url = f"{URL}messages/{message.pk}/delete-for-me/"
+
+    assert other_buyer_client.post(url).status_code == 404
+    assert message.deleted_for.count() == 0
 
 
 def test_a_stranger_cannot_reach_a_message_at_all(other_buyer_client, thread, buyer):

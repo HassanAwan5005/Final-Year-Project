@@ -17,8 +17,6 @@ from rest_framework.test import APIClient
 
 from apps.core.constants import UserRole
 
-DELIVERY = {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "03001234567"}
-
 User = get_user_model()
 
 PASSWORD = "TestPass123!"
@@ -234,13 +232,46 @@ def completed_booking(booking, photographer):
 
 
 @pytest.fixture
-def paid_order_item(funded_buyer, product):
-    """One purchased product — the eligibility proof for a product review."""
-    from apps.marketplace.services import add_to_cart, checkout
+def make_order(db):
+    """
+    An order from before buying moved to chat.
 
-    add_to_cart(funded_buyer, product)
-    order = checkout(funded_buyer, **DELIVERY)
-    return order.items.first()
+    The app no longer creates orders, but existing ones still carry downloads,
+    product reviews and revenue history.
+    """
+    from django.utils import timezone
+
+    from apps.marketplace.models import Order, OrderItem, OrderStatus
+
+    def _make(buyer, product):
+        commission = (product.price * product.commission_percent / 100).quantize(
+            Decimal("0.01")
+        )
+        order = Order.objects.create(
+            buyer=buyer,
+            subtotal=product.price,
+            total=product.price,
+            status=OrderStatus.PAID,
+            paid_at=timezone.now(),
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            seller=product.seller,
+            product_title=product.title,
+            price=product.price,
+            commission_amount=commission,
+            seller_earning=product.price - commission,
+        )
+        return order
+
+    return _make
+
+
+@pytest.fixture
+def paid_order_item(funded_buyer, product, make_order):
+    """One purchased product — the eligibility proof for a product review."""
+    return make_order(funded_buyer, product).items.first()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

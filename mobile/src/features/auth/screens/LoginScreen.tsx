@@ -12,7 +12,7 @@ import { colors, radius, spacing, typography } from '../../../theme';
 import { loginSchema, type LoginForm } from '../schemas';
 
 interface Props {
-  /** Set after a password reset, so the sign-in is for that same account. */
+  /** Set after sign-up or a password reset, so the sign-in is for that same account. */
   resetEmail?: string;
   onGoRegister: () => void;
   onGoForgot: () => void;
@@ -77,7 +77,7 @@ export function LoginScreen({ resetEmail, onGoRegister, onGoForgot }: Props) {
         <View style={styles.logoMark}>
           <Text style={styles.logoGlyph}>S</Text>
         </View>
-        <Text style={styles.title}>Welcome back</Text>
+        <Text style={styles.title}>Welcome</Text>
         <Text style={styles.subtitle}>
           Sign in to book Pakistan's best photographers
         </Text>

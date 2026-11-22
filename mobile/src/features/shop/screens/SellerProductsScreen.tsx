@@ -19,7 +19,7 @@ import { ProductThumb } from '../components/ProductThumb';
 import { useSellerProducts, useSellerSummary } from '../hooks/useShop';
 
 /**
- * What a seller (buyer or photographer) has listed, and what it earned.
+ * What a seller (buyer or photographer) has listed. Each ad can be edited.
  *
  * New listings are created from the Shop tab's Sell form; they show here as
  * "In review" until an admin approves them, then "Live".
@@ -27,9 +27,11 @@ import { useSellerProducts, useSellerSummary } from '../hooks/useShop';
 export function SellerProductsScreen({
   onBack,
   onOpenProduct,
+  onEditProduct,
 }: {
   onBack: () => void;
   onOpenProduct: (slug: string) => void;
+  onEditProduct: (productId: number) => void;
 }) {
   const products = useSellerProducts();
   const summary = useSellerSummary();
@@ -61,39 +63,33 @@ export function SellerProductsScreen({
               <View style={styles.summary}>
                 <View style={styles.summaryRow}>
                   <Metric
-                    value={formatPKR(summary.data.net_earnings)}
-                    label="Net earnings"
-                    highlight
+                    value={String(summary.data.products_total)}
+                    label="Listings"
                   />
-                  <Metric
-                    value={formatCount(summary.data.sales_count)}
-                    label="Sales"
-                  />
-                </View>
-                <View style={styles.summaryRow}>
                   <Metric
                     value={String(summary.data.products_live)}
                     label="Live listings"
-                  />
-                  <Metric
-                    value={formatPKR(summary.data.gross_revenue)}
-                    label="Gross revenue"
+                    highlight
                   />
                 </View>
                 <Text style={styles.summaryNote}>
-                  Buyers pay you in cash on delivery.
+                  Interested buyers message you from your ad.
                 </Text>
               </View>
             ) : undefined
           }
           renderItem={({ item }) => (
-            <SellerRow product={item} onPress={() => onOpenProduct(item.slug)} />
+            <SellerRow
+              product={item}
+              onPress={() => onOpenProduct(item.slug)}
+              onEdit={() => onEditProduct(item.id)}
+            />
           )}
           ListEmptyComponent={
             <EmptyState
               icon="pricetags-outline"
               title="No products yet"
-              detail="Listings you sell in the SnapSphere shop appear here with their sales."
+              detail="Products you list in the SnapSphere shop appear here."
             />
           }
           refreshControl={
@@ -115,9 +111,11 @@ export function SellerProductsScreen({
 function SellerRow({
   product,
   onPress,
+  onEdit,
 }: {
   product: SellerProduct;
   onPress: () => void;
+  onEdit: () => void;
 }) {
   // A listing is only visible to buyers when the seller has published it AND
   // an admin has approved it. Showing the two states separately is what tells
@@ -144,7 +142,7 @@ function SellerRow({
           {product.title}
         </Text>
         <Text style={styles.rowMeta}>
-          {product.type_label} · {formatCount(product.sales_count)} sold
+          {product.type_label} · {formatCount(product.view_count)} views
         </Text>
       </View>
 
@@ -153,6 +151,16 @@ function SellerRow({
         <Text style={[styles.rowStatus, live ? styles.statusLive : styles.statusDraft]}>
           {label}
         </Text>
+        <Pressable
+          onPress={onEdit}
+          hitSlop={10}
+          style={styles.edit}
+          accessibilityRole="button"
+          accessibilityLabel={`Edit ${product.title}`}
+        >
+          <Ionicons name="create-outline" size={13} color={colors.gold} />
+          <Text style={styles.editText}>Edit</Text>
+        </Pressable>
       </View>
     </Pressable>
   );
@@ -223,6 +231,8 @@ const styles = StyleSheet.create({
   rowRight: { alignItems: 'flex-end' },
   rowPrice: { ...typography.caption, color: colors.gold, fontWeight: '700' },
   rowStatus: { ...typography.tiny, marginTop: 2 },
+  edit: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: spacing.xs },
+  editText: { ...typography.tiny, color: colors.gold, fontWeight: '600' },
   statusLive: { color: colors.green },
   statusDraft: { color: colors.dim },
 });

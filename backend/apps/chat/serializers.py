@@ -122,13 +122,15 @@ class ConversationSerializer(serializers.ModelSerializer):
     is_muted = serializers.SerializerMethodField()
     is_blocked = serializers.SerializerMethodField()
     booking = serializers.SerializerMethodField()
+    product = serializers.SerializerMethodField()
+    last_message_text = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
         fields = (
             "id", "other_participant", "last_message_text", "last_message_at",
             "message_count", "unread_count", "is_muted", "is_blocked",
-            "is_archived", "booking", "created_at",
+            "is_archived", "booking", "product", "created_at",
         )
 
     def _link(self, obj):
@@ -145,6 +147,10 @@ class ConversationSerializer(serializers.ModelSerializer):
         if other is None:
             return None
         return ChatUserSerializer(other, context=self.context).data
+
+    def get_last_message_text(self, obj) -> str:
+        previews = self.context.get("own_previews") or {}
+        return previews.get(obj.pk, obj.last_message_text)
 
     def get_unread_count(self, obj) -> int:
         link = self._link(obj)
@@ -177,6 +183,21 @@ class ConversationSerializer(serializers.ModelSerializer):
         }
 
 
+    def get_product(self, obj) -> dict | None:
+        """The shop listing this thread is about, shown above the messages."""
+        if obj.product_id is None:
+            return None
+        product = obj.product
+        return {
+            "id": product.pk,
+            "slug": product.slug,
+            "title": product.title,
+            "price": str(product.price),
+            "thumbnail_url": _absolute(self.context.get("request"), product.thumbnail),
+            "is_available": product.is_purchasable,
+        }
+
+
 class ConversationDetailSerializer(ConversationSerializer):
     """Adds the caller's read watermark so the app can place the divider line."""
 
@@ -204,6 +225,10 @@ class ConversationStartSerializer(serializers.Serializer):
 
     user = serializers.IntegerField()
     booking = serializers.IntegerField(required=False, allow_null=True)
+    product = serializers.IntegerField(
+        required=False, allow_null=True,
+        help_text="A live shop product sold by `user`, when messaging its seller.",
+    )
     message = serializers.CharField(
         max_length=5000, required=False, allow_blank=True,
         help_text="Optional first message, sent in the same request.",
@@ -230,6 +255,24 @@ class ConversationStartSerializer(serializers.Serializer):
         if booking.buyer_id != user.id and booking.photographer.user_id != user.id:
             raise serializers.ValidationError("That booking is not yours.")
         return booking
+
+    def validate_product(self, value):
+        if value is None:
+            return None
+        from apps.marketplace.selectors import purchasable_products
+
+        product = purchasable_products().filter(pk=value).first()
+        if product is None:
+            raise serializers.ValidationError("This product is no longer available.")
+        return product
+
+    def validate(self, attrs):
+        product = attrs.get("product")
+        if product is not None and product.seller_id != attrs["user"].id:
+            raise serializers.ValidationError(
+                {"product": "This product belongs to another seller."}
+            )
+        return attrs
 
 
 class MessageSendSerializer(serializers.Serializer):

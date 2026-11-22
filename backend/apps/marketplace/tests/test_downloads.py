@@ -15,22 +15,16 @@ from django.utils import timezone
 from apps.core.exceptions import BusinessRuleViolation, ResourceGone
 from apps.marketplace.models import DownloadToken
 from apps.marketplace.services import (
-    add_to_cart,
-    checkout,
     issue_download_token,
     redeem_download_token,
 )
-
-DELIVERY = {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "03001234567"}
 
 pytestmark = pytest.mark.django_db
 
 
 @pytest.fixture
-def purchase(funded_buyer, product):
-    add_to_cart(funded_buyer, product)
-    order = checkout(funded_buyer, **DELIVERY)
-    return order.items.first()
+def purchase(funded_buyer, product, make_order):
+    return make_order(funded_buyer, product).items.first()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

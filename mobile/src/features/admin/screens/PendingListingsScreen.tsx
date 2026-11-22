@@ -245,6 +245,7 @@ function ListingCard({
       <Text style={styles.meta}>
         Seller: {listing.seller_name} · {formatDate(listing.created_at)}
       </Text>
+      {listing.address ? <Text style={styles.meta}>Address: {listing.address}</Text> : null}
 
       {listing.description ? (
         <Pressable onPress={() => setExpanded((open) => !open)}>

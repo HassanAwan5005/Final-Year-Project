@@ -14,7 +14,7 @@ import { WishlistScreen } from '../features/profile/screens/WishlistScreen';
 import { ProductDetailScreen } from '../features/shop/screens/ProductDetailScreen';
 import { PurchasesScreen } from '../features/shop/screens/PurchasesScreen';
 import { SellerProductsScreen } from '../features/shop/screens/SellerProductsScreen';
-import { CartScreen } from '../features/shop/screens/CartScreen';
+import { EditProductScreen } from '../features/shop/screens/EditProductScreen';
 import { SellProductScreen } from '../features/shop/screens/SellProductScreen';
 import { ShopHomeScreen } from '../features/shop/screens/ShopHomeScreen';
 import { ShopScreen } from '../features/shop/screens/ShopScreen';
@@ -41,7 +41,7 @@ export type PhotographerTabParams = {
 
 /**
  * The Shop tab is the same as the buyer's: a Buy / Sell page, with the grid,
- * the Sell form, the cart and "My listings" pushed on this stack. The
+ * the Sell form and "My listings" pushed on this stack. The
  * catalogue is also one tap from Profile ("My products").
  */
 export type PhotographerStackParams = {
@@ -51,7 +51,7 @@ export type PhotographerStackParams = {
   ProductDetail: { slug: string };
   ShopBrowse: undefined;
   SellProduct: undefined;
-  Cart: undefined;
+  EditProduct: { productId: number };
   Purchases: undefined;
   Wishlist: undefined;
   MyServices: undefined;
@@ -69,6 +69,7 @@ export type PhotographerStackParams = {
     conversationId: number;
     withUserId?: number;
     bookingId?: number;
+    productId?: number;
     title?: string;
   };
 };
@@ -200,6 +201,17 @@ export function PhotographerNavigator() {
           <SellerProductsScreen
             onBack={() => navigation.goBack()}
             onOpenProduct={(slug) => navigation.navigate('ProductDetail', { slug })}
+            onEditProduct={(productId) => navigation.navigate('EditProduct', { productId })}
+          />
+        )}
+      </Stack.Screen>
+
+      <Stack.Screen name="EditProduct">
+        {({ route, navigation }) => (
+          <EditProductScreen
+            productId={route.params.productId}
+            onBack={() => navigation.goBack()}
+            onSaved={() => navigation.goBack()}
           />
         )}
       </Stack.Screen>
@@ -209,8 +221,15 @@ export function PhotographerNavigator() {
           <ProductDetailScreen
             slug={route.params.slug}
             onBack={() => navigation.goBack()}
-            // A photographer shops like any buyer, with the same Cart.
-            onOpenCart={() => navigation.navigate('Cart')}
+            onMessageSeller={(product) =>
+              navigation.navigate('Chat', {
+                conversationId: 0,
+                withUserId: product.seller.id,
+                productId: product.id,
+                title: product.seller.display_name,
+              })
+            }
+            onEdit={(productId) => navigation.navigate('EditProduct', { productId })}
           />
         )}
       </Stack.Screen>
@@ -221,7 +240,6 @@ export function PhotographerNavigator() {
           <ShopScreen
             onBack={() => navigation.goBack()}
             onOpenProduct={(slug) => navigation.navigate('ProductDetail', { slug })}
-            onOpenCart={() => navigation.navigate('Cart')}
           />
         )}
       </Stack.Screen>
@@ -231,16 +249,6 @@ export function PhotographerNavigator() {
           <SellProductScreen
             onBack={() => navigation.goBack()}
             onSubmitted={() => navigation.replace('SellerProducts')}
-          />
-        )}
-      </Stack.Screen>
-
-      <Stack.Screen name="Cart">
-        {({ navigation }) => (
-          <CartScreen
-            onBack={() => navigation.goBack()}
-            onOpenProduct={(slug) => navigation.navigate('ProductDetail', { slug })}
-            onPurchased={() => navigation.replace('Purchases')}
           />
         )}
       </Stack.Screen>
@@ -347,6 +355,7 @@ export function PhotographerNavigator() {
                 ? {
                     userId: route.params.withUserId,
                     bookingId: route.params.bookingId,
+                    productId: route.params.productId,
                   }
                 : undefined
             }
@@ -355,6 +364,7 @@ export function PhotographerNavigator() {
             onOpenBooking={(bookingId) =>
               navigation.navigate('BookingDetail', { bookingId })
             }
+            onOpenProduct={(slug) => navigation.navigate('ProductDetail', { slug })}
           />
         )}
       </Stack.Screen>

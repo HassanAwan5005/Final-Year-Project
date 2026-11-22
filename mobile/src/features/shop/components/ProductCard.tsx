@@ -7,14 +7,7 @@ import { formatPKR } from '../../../utils/format';
 import type { DigitalProduct } from '../../../types/models';
 import { ProductThumb } from './ProductThumb';
 
-/**
- * A Shop grid card.
- *
- * The three state flags (`is_owned`, `in_cart`, `is_wishlisted`) are computed
- * server-side from sets loaded once per request, so drawing them costs
- * nothing here. Deriving "do I own this?" on the client would mean shipping
- * the buyer's whole purchase history to every screen.
- */
+/** A Shop grid card. */
 export function ProductCard({
   product,
   width,
@@ -42,7 +35,7 @@ export function ProductCard({
           iconSize={26}
         />
 
-        {product.discount_percent > 0 && !product.is_owned ? (
+        {product.discount_percent > 0 ? (
           <View style={styles.discount}>
             <Text style={styles.discountText}>−{product.discount_percent}%</Text>
           </View>
@@ -62,13 +55,6 @@ export function ProductCard({
             />
           </Pressable>
         ) : null}
-
-        {product.is_owned ? (
-          <View style={styles.ownedBadge}>
-            <Ionicons name="checkmark-circle" size={12} color={colors.green} />
-            <Text style={styles.ownedText}>Owned</Text>
-          </View>
-        ) : null}
       </View>
 
       <View style={styles.body}>
@@ -81,20 +67,13 @@ export function ProductCard({
         </Text>
 
         <View style={styles.footer}>
-          {product.is_owned ? (
-            <Text style={styles.owned}>In your library</Text>
-          ) : (
-            <View style={styles.priceRow}>
-              <Text style={styles.price}>{formatPKR(product.price)}</Text>
-              {product.compare_at_price &&
-              Number(product.compare_at_price) > Number(product.price) ? (
-                <Text style={styles.was}>{formatPKR(product.compare_at_price)}</Text>
-              ) : null}
-            </View>
-          )}
-          {product.in_cart && !product.is_owned ? (
-            <Ionicons name="cart" size={14} color={colors.gold} />
-          ) : null}
+          <View style={styles.priceRow}>
+            <Text style={styles.price}>{formatPKR(product.price)}</Text>
+            {product.compare_at_price &&
+            Number(product.compare_at_price) > Number(product.price) ? (
+              <Text style={styles.was}>{formatPKR(product.compare_at_price)}</Text>
+            ) : null}
+          </View>
         </View>
       </View>
     </Pressable>
@@ -134,19 +113,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  ownedBadge: {
-    position: 'absolute',
-    bottom: spacing.sm,
-    left: spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: colors.overlay,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderRadius: radius.sm,
-  },
-  ownedText: { ...typography.tiny, color: colors.green, fontWeight: '600' },
   body: { padding: spacing.md, gap: 2 },
   type: { ...typography.tiny, color: colors.dim, textTransform: 'uppercase' },
   title: { ...typography.bodyBold, color: colors.text, lineHeight: 19 },
@@ -164,5 +130,4 @@ const styles = StyleSheet.create({
     color: colors.dim,
     textDecorationLine: 'line-through',
   },
-  owned: { ...typography.caption, color: colors.green, fontWeight: '600' },
 });

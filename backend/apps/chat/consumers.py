@@ -126,6 +126,9 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         message["is_mine"] = (event["message"].get("sender_id") == self.user.id)
         await self.send_json({"type": "message", **message})
 
+    async def message_deleted(self, event):
+        await self.send_json({"type": "message_deleted", "id": event["message_id"]})
+
     async def typing_event(self, event):
         if event["user_id"] != self.user.id:  # don't echo your own typing
             await self.send_json(

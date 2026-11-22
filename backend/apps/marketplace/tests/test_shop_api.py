@@ -8,9 +8,7 @@ the shapes the mobile app parses.
 
 import pytest
 
-from apps.marketplace.services import add_to_cart, checkout
-
-DELIVERY = {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "03001234567"}
+from apps.marketplace.models import DigitalProduct
 
 pytestmark = pytest.mark.django_db
 
@@ -32,7 +30,6 @@ def test_anonymous_flags_are_all_false(api_client, product):
 
     assert row["is_owned"] is False
     assert row["is_wishlisted"] is False
-    assert row["in_cart"] is False
 
 
 def test_unapproved_products_are_hidden(api_client, product):
@@ -118,140 +115,27 @@ def test_the_grid_costs_a_constant_number_of_queries(
     buyer_client, product, second_product, django_assert_max_num_queries
 ):
     """
-    Ownership, wishlist and cart membership are loaded once per request. Read
-    per row instead, a 20-card grid would cost 60 extra queries.
+    Ownership and wishlist membership are loaded once per request. Read per
+    row instead, a 20-card grid would cost 40 extra queries.
     """
     with django_assert_max_num_queries(9):
         buyer_client.get(f"{URL}products/")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# CART OVER HTTP
+# PAST ORDERS
 # ═══════════════════════════════════════════════════════════════════════════
-def test_cart_round_trip(buyer_client, product):
-    empty = buyer_client.get(f"{URL}cart/").json()["data"]
-    assert empty["count"] == 0
-    assert empty["can_checkout"] is False
-
-    added = buyer_client.post(f"{URL}cart/add/", {"product": product.pk}, format="json")
-    assert added.status_code == 201
-    assert added.json()["data"]["count"] == 1
-    assert added.json()["data"]["subtotal"] == "3500.00"
-
-    removed = buyer_client.post(f"{URL}cart/remove/{product.pk}/", {}, format="json")
-    assert removed.json()["data"]["count"] == 0
-
-
-def test_a_cart_can_check_out_without_any_balance(buyer_client, product):
-    """Cash on delivery: no wallet balance is needed."""
-    body = buyer_client.post(
-        f"{URL}cart/add/", {"product": product.pk}, format="json"
-    ).json()["data"]
-
-    assert body["can_checkout"] is True
-    assert "wallet_balance" not in body
-    assert "shortfall" not in body
-
-
-def test_cart_flags_a_line_that_went_off_sale(buyer_client, funded_buyer, product):
-    """
-    Reported per line, so the buyer removes the offending item rather than
-    facing one opaque error for the whole basket.
-    """
-    add_to_cart(funded_buyer, product)
-    product.is_published = False
-    product.save(update_fields=["is_published"])
-
-    body = buyer_client.get(f"{URL}cart/").json()["data"]
-    assert body["unavailable_count"] == 1
-    assert body["items"][0]["is_available"] is False
-    assert body["can_checkout"] is False
-
-
-def test_clear_empties_the_cart(buyer_client, product, second_product):
-    buyer_client.post(f"{URL}cart/add/", {"product": product.pk}, format="json")
-    buyer_client.post(f"{URL}cart/add/", {"product": second_product.pk}, format="json")
-
-    assert buyer_client.post(f"{URL}cart/clear/", {}, format="json").json()["data"]["count"] == 0
-
-
-def test_cart_is_private(other_buyer_client, funded_buyer, product):
-    add_to_cart(funded_buyer, product)
-    assert other_buyer_client.get(f"{URL}cart/").json()["data"]["count"] == 0
-
-
-def test_anonymous_has_no_cart(api_client):
-    assert api_client.get(f"{URL}cart/").status_code == 401
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# CHECKOUT & ORDERS OVER HTTP
-# ═══════════════════════════════════════════════════════════════════════════
-def test_checkout_over_http(buyer_client, funded_buyer, product):
-    add_to_cart(funded_buyer, product)
-    response = buyer_client.post(
-        f"{URL}orders/checkout/", DELIVERY, format="json",
-        HTTP_IDEMPOTENCY_KEY="tap-1",
+def test_buying_endpoints_are_gone(buyer_client, product):
+    """Deals are made in chat — there is no cart or checkout to post to."""
+    assert buyer_client.get(f"{URL}cart/").status_code == 404
+    assert (
+        buyer_client.post(f"{URL}cart/add/", {"product": product.pk}).status_code == 404
     )
-
-    assert response.status_code == 201
-    body = response.json()["data"]
-    assert body["status"] == "PAID"
-    assert body["payment_method"] == "COD"
-    assert body["delivery_address"] == DELIVERY["delivery_address"]
-    assert body["delivery_phone"] == DELIVERY["delivery_phone"]
-    assert body["total"] == "3500.00"
-    assert len(body["items"]) == 1
+    assert buyer_client.post(f"{URL}orders/checkout/", {}).status_code in (404, 405)
 
 
-def test_checkout_ignores_a_client_supplied_total(buyer_client, funded_buyer, product):
-    """The cart is the source of truth; the body carries no money at all."""
-    add_to_cart(funded_buyer, product)
-    body = buyer_client.post(
-        f"{URL}orders/checkout/",
-        {**DELIVERY, "total": "1.00", "subtotal": "1.00"},
-        format="json",
-    ).json()["data"]
-
-    assert body["total"] == "3500.00"
-
-
-def test_a_retry_with_the_same_key_places_one_order(buyer_client, funded_buyer, product):
-    add_to_cart(funded_buyer, product)
-    headers = {"HTTP_IDEMPOTENCY_KEY": "tap-1"}
-
-    first = buyer_client.post(f"{URL}orders/checkout/", DELIVERY, format="json", **headers)
-    second = buyer_client.post(f"{URL}orders/checkout/", DELIVERY, format="json", **headers)
-
-    assert first.json()["data"]["id"] == second.json()["data"]["id"]
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        {},
-        {"delivery_phone": "03001234567"},
-        {"delivery_address": "House 12, Street 4, Gulberg III, Lahore"},
-        {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "12345"},
-        {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "+923001234567"},
-        {"delivery_address": "House 12, Street 4, Gulberg III, Lahore", "delivery_phone": "0300123456"},
-    ],
-)
-def test_checkout_requires_a_delivery_address_and_valid_phone(
-    buyer_client, buyer, product, body
-):
-    add_to_cart(buyer, product)
-    response = buyer_client.post(f"{URL}orders/checkout/", body, format="json")
-
-    assert response.status_code == 400
-    from apps.marketplace.models import Order
-
-    assert Order.objects.count() == 0
-
-
-def test_orders_list_and_detail(buyer_client, funded_buyer, product):
-    add_to_cart(funded_buyer, product)
-    order = checkout(funded_buyer, **DELIVERY)
+def test_past_orders_list_and_detail(buyer_client, funded_buyer, product, make_order):
+    order = make_order(funded_buyer, product)
 
     listed = buyer_client.get(f"{URL}orders/").json()["data"]
     assert [row["order_number"] for row in listed] == [order.order_number]
@@ -260,16 +144,17 @@ def test_orders_list_and_detail(buyer_client, funded_buyer, product):
     assert detail["items"][0]["product_title"] == product.title
 
 
-def test_someone_elses_order_is_404(other_buyer_client, funded_buyer, product):
-    add_to_cart(funded_buyer, product)
-    order = checkout(funded_buyer, **DELIVERY)
-
+def test_someone_elses_order_is_404(
+    other_buyer_client, funded_buyer, product, make_order
+):
+    order = make_order(funded_buyer, product)
     assert other_buyer_client.get(f"{URL}orders/{order.pk}/").status_code == 404
 
 
-def test_ownership_shows_up_in_the_grid(buyer_client, funded_buyer, product):
-    add_to_cart(funded_buyer, product)
-    checkout(funded_buyer, **DELIVERY)
+def test_ownership_shows_up_in_the_grid(
+    buyer_client, funded_buyer, product, make_order
+):
+    make_order(funded_buyer, product)
 
     row = buyer_client.get(f"{URL}products/").json()["data"][0]
     assert row["is_owned"] is True
@@ -283,11 +168,10 @@ def test_seller_sees_their_own_catalogue(photographer_client, product):
     assert [r["slug"] for r in rows] == [product.slug]
 
 
-def test_seller_summary_reflects_a_sale(
-    photographer_client, funded_buyer, product
+def test_seller_summary_reflects_a_past_sale(
+    photographer_client, funded_buyer, product, make_order
 ):
-    add_to_cart(funded_buyer, product)
-    checkout(funded_buyer, **DELIVERY)
+    make_order(funded_buyer, product)
 
     body = photographer_client.get(f"{URL}seller/products/summary/").json()["data"]
     assert body["sales_count"] == 1
@@ -321,6 +205,7 @@ def _listing(**overrides):
         "description": "Lightly used, no scratches, comes with both caps.",
         "price": "18000",
         "product_type": "LENS",
+        "address": "Gulberg III, Lahore",
         "photos": [_photo("a.png"), _photo("b.png")],
     }
     data.update(overrides)
@@ -361,31 +246,205 @@ def test_an_unapproved_listing_is_not_in_the_shop(buyer_client, settings, tmp_pa
     assert slug not in [r["slug"] for r in rows]
 
 
-def test_an_approved_buyer_listing_is_sold_like_any_other(
-    buyer, buyer_client, other_buyer, settings, tmp_path
+@pytest.mark.parametrize("address", [None, "", "    ", "abc"])
+def test_a_listing_needs_an_address(buyer_client, address):
+    data = _listing(address=address)
+    if address is None:
+        del data["address"]
+    response = buyer_client.post(f"{URL}seller/products/", data, format="multipart")
+
+    assert response.status_code == 400
+    assert DigitalProduct.objects.count() == 0
+
+
+def test_everyone_sees_an_approved_listings_photos_and_address(
+    api_client, buyer, buyer_client, other_buyer_client, photographer_client,
+    settings, tmp_path,
 ):
-    from decimal import Decimal
+    listing = _live_listing(buyer_client, settings, tmp_path)
 
-    from apps.marketplace.models import DigitalProduct
-    from apps.profiles.models import WalletTransactionType
-    from apps.profiles.services import credit_wallet
+    for client in (api_client, buyer_client, other_buyer_client, photographer_client):
+        detail = client.get(f"{URL}products/{listing.slug}/").json()["data"]
+        assert detail["seller"]["display_name"] == buyer.full_name
+        assert detail["seller"]["id"] == buyer.pk
+        assert len(detail["preview_image_urls"]) == 2
+        assert detail["address"] == "Gulberg III, Lahore"
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# EDITING AN AD
+# ═══════════════════════════════════════════════════════════════════════════
+def _live_listing(client, settings, tmp_path):
     settings.MEDIA_ROOT = tmp_path
-    slug = buyer_client.post(
+    slug = client.post(
         f"{URL}seller/products/", _listing(), format="multipart"
     ).json()["data"]["slug"]
     DigitalProduct.objects.filter(slug=slug).update(is_approved=True)
+    return DigitalProduct.objects.get(slug=slug)
 
-    detail = buyer_client.get(f"{URL}products/{slug}/").json()["data"]
-    assert detail["seller"]["display_name"] == buyer.full_name
-    assert len(detail["preview_image_urls"]) == 2
 
-    # Another buyer purchases it; the buyer-seller is paid.
-    credit_wallet(
-        other_buyer, Decimal("50000.00"),
-        txn_type=WalletTransactionType.TOPUP, description="test top-up",
+def _edit(client, listing, *, keep=None, photos=(), **overrides):
+    data = _listing(**overrides)
+    data["keep_photos"] = listing.preview_images if keep is None else keep
+    data["photos"] = list(photos)
+    return client.patch(
+        f"{URL}seller/products/{listing.pk}/", data, format="multipart"
     )
-    product = DigitalProduct.objects.get(slug=slug)
-    add_to_cart(other_buyer, product)
-    order = checkout(other_buyer, **DELIVERY)
-    assert order.items.get().seller_id == buyer.pk
+
+
+def test_the_edit_form_gets_the_whole_ad(buyer_client, settings, tmp_path):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    body = buyer_client.get(f"{URL}seller/products/{listing.pk}/").json()["data"]
+
+    assert body["description"] == listing.description
+    assert body["address"] == "Gulberg III, Lahore"
+    assert [photo["path"] for photo in body["photos"]] == listing.preview_images
+    assert all(photo["url"].startswith("http") for photo in body["photos"])
+
+
+def test_a_seller_can_add_and_remove_photos_of_a_live_ad(
+    buyer_client, settings, tmp_path, django_capture_on_commit_callbacks
+):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    first, second = listing.preview_images
+    old_thumbnail = listing.thumbnail.name
+
+    with django_capture_on_commit_callbacks(execute=True):
+        response = _edit(
+            buyer_client, listing, keep=[second], photos=[_photo("c.png"), _photo("d.png")]
+        )
+
+    assert response.status_code == 200, response.content
+    listing.refresh_from_db()
+    assert len(listing.preview_images) == 3
+    assert listing.preview_images[0] == second
+    assert first not in listing.preview_images
+    # A new cover, and the removed files are gone from storage.
+    assert listing.thumbnail.name != old_thumbnail
+    assert not (tmp_path / first).exists()
+    assert not (tmp_path / old_thumbnail).exists()
+    assert all((tmp_path / path).exists() for path in listing.preview_images)
+    assert (tmp_path / listing.thumbnail.name).exists()
+
+
+def test_every_photo_can_be_replaced(
+    buyer_client, settings, tmp_path, django_capture_on_commit_callbacks
+):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    old = listing.preview_images
+
+    with django_capture_on_commit_callbacks(execute=True):
+        assert _edit(buyer_client, listing, keep=[], photos=[_photo("n.png")]).status_code == 200
+
+    listing.refresh_from_db()
+    assert len(listing.preview_images) == 1
+    assert not set(old) & set(listing.preview_images)
+
+
+def test_adding_a_photo_keeps_the_cover(buyer_client, settings, tmp_path):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    thumbnail = listing.thumbnail.name
+
+    assert _edit(buyer_client, listing, photos=[_photo("c.png")]).status_code == 200
+    listing.refresh_from_db()
+    assert listing.thumbnail.name == thumbnail
+    assert len(listing.preview_images) == 3
+
+
+def test_a_photo_shared_with_another_listing_is_not_deleted(
+    buyer_client, second_product, settings, tmp_path, django_capture_on_commit_callbacks
+):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    first, second = listing.preview_images
+    second_product.preview_images = [first]
+    second_product.save(update_fields=["preview_images"])
+
+    with django_capture_on_commit_callbacks(execute=True):
+        assert _edit(buyer_client, listing, keep=[second]).status_code == 200
+    assert (tmp_path / first).exists()
+
+
+def test_changing_the_content_of_a_live_ad_sends_it_back_to_review(
+    buyer_client, settings, tmp_path
+):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    assert _edit(buyer_client, listing, title="Canon 85mm f/1.8 lens").status_code == 200
+
+    listing.refresh_from_db()
+    assert listing.title == "Canon 85mm f/1.8 lens"
+    assert listing.is_published is True
+    assert listing.is_approved is False
+
+
+def test_changing_only_the_price_or_address_keeps_the_ad_live(
+    buyer_client, settings, tmp_path
+):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    response = _edit(buyer_client, listing, price="16500", address="DHA Phase 5, Lahore")
+
+    assert response.status_code == 200
+    listing.refresh_from_db()
+    assert str(listing.price) == "16500.00"
+    assert listing.address == "DHA Phase 5, Lahore"
+    assert listing.is_approved is True
+
+
+def test_editing_a_rejected_ad_submits_it_again(buyer_client, settings, tmp_path):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    DigitalProduct.objects.filter(pk=listing.pk).update(
+        is_published=False, is_approved=False
+    )
+    assert _edit(buyer_client, listing).status_code == 200
+
+    listing.refresh_from_db()
+    assert listing.is_published is True
+    assert listing.is_approved is False
+
+
+def test_an_ad_keeps_between_one_and_five_photos(buyer_client, settings, tmp_path):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+
+    assert _edit(buyer_client, listing, keep=[]).status_code == 400
+    too_many = [_photo(f"{n}.png") for n in range(4)]
+    assert _edit(buyer_client, listing, photos=too_many).status_code == 400
+
+    before = listing.preview_images
+    listing.refresh_from_db()
+    assert listing.preview_images == before
+
+
+def test_an_edit_needs_an_address(buyer_client, settings, tmp_path):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    assert _edit(buyer_client, listing, address="").status_code == 400
+
+
+def test_an_edit_cannot_pull_in_someone_elses_file(buyer_client, settings, tmp_path):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    response = _edit(buyer_client, listing, keep=["avatars/private.webp"])
+
+    assert response.status_code >= 400
+    listing.refresh_from_db()
+    assert "avatars/private.webp" not in listing.preview_images
+
+
+def test_nobody_else_can_open_or_edit_the_ad(
+    buyer_client, other_buyer_client, photographer_client, api_client, settings, tmp_path
+):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    url = f"{URL}seller/products/{listing.pk}/"
+
+    for client in (other_buyer_client, photographer_client):
+        assert client.get(url).status_code == 404
+        assert _edit(client, listing, title="Hijacked ad").status_code == 404
+    assert api_client.get(url).status_code == 401
+
+
+def test_a_seller_can_open_their_own_ad_while_in_review(
+    buyer_client, other_buyer_client, settings, tmp_path
+):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    DigitalProduct.objects.filter(pk=listing.pk).update(is_approved=False)
+    url = f"{URL}products/{listing.slug}/"
+
+    assert buyer_client.get(url).status_code == 200
+    assert other_buyer_client.get(url).status_code == 404

@@ -21,7 +21,7 @@ import { EditProfileScreen } from '../features/profile/screens/EditProfileScreen
 import { ProfileScreen } from '../features/profile/screens/ProfileScreen';
 import { VerifyEmailScreen } from '../features/auth/screens/VerifyEmailScreen';
 import { WishlistScreen } from '../features/profile/screens/WishlistScreen';
-import { CartScreen } from '../features/shop/screens/CartScreen';
+import { EditProductScreen } from '../features/shop/screens/EditProductScreen';
 import { ProductDetailScreen } from '../features/shop/screens/ProductDetailScreen';
 import { PurchasesScreen } from '../features/shop/screens/PurchasesScreen';
 import { SellerProductsScreen } from '../features/shop/screens/SellerProductsScreen';
@@ -57,8 +57,8 @@ export type BuyerStackParams = {
   ProductDetail: { slug: string };
   ShopBrowse: undefined;
   SellProduct: undefined;
+  EditProduct: { productId: number };
   SellerProducts: undefined;
-  Cart: undefined;
   Purchases: undefined;
   Wishlist: undefined;
   EditProfile: undefined;
@@ -112,6 +112,7 @@ export type BuyerStackParams = {
     conversationId: number;
     withUserId?: number;
     bookingId?: number;
+    productId?: number;
     title?: string;
   };
 };
@@ -324,7 +325,15 @@ export function BuyerNavigator() {
           <ProductDetailScreen
             slug={route.params.slug}
             onBack={() => navigation.goBack()}
-            onOpenCart={() => navigation.navigate('Cart')}
+            onMessageSeller={(product) =>
+              navigation.navigate('Chat', {
+                conversationId: 0,
+                withUserId: product.seller.id,
+                productId: product.id,
+                title: product.seller.display_name,
+              })
+            }
+            onEdit={(productId) => navigation.navigate('EditProduct', { productId })}
           />
         )}
       </Stack.Screen>
@@ -335,7 +344,6 @@ export function BuyerNavigator() {
           <ShopScreen
             onBack={() => navigation.goBack()}
             onOpenProduct={(slug) => navigation.navigate('ProductDetail', { slug })}
-            onOpenCart={() => navigation.navigate('Cart')}
           />
         )}
       </Stack.Screen>
@@ -354,19 +362,17 @@ export function BuyerNavigator() {
           <SellerProductsScreen
             onBack={() => navigation.goBack()}
             onOpenProduct={(slug) => navigation.navigate('ProductDetail', { slug })}
+            onEditProduct={(productId) => navigation.navigate('EditProduct', { productId })}
           />
         )}
       </Stack.Screen>
 
-      <Stack.Screen name="Cart">
-        {({ navigation }) => (
-          <CartScreen
+      <Stack.Screen name="EditProduct">
+        {({ route, navigation }) => (
+          <EditProductScreen
+            productId={route.params.productId}
             onBack={() => navigation.goBack()}
-            onOpenProduct={(slug) => navigation.navigate('ProductDetail', { slug })}
-            // Straight to the library after paying: the cart the buyer came
-            // from is now empty, so returning to it would show an empty state
-            // as the reward for a purchase.
-            onPurchased={() => navigation.replace('Purchases')}
+            onSaved={() => navigation.goBack()}
           />
         )}
       </Stack.Screen>
@@ -510,6 +516,7 @@ export function BuyerNavigator() {
                 ? {
                     userId: route.params.withUserId,
                     bookingId: route.params.bookingId,
+                    productId: route.params.productId,
                   }
                 : undefined
             }
@@ -518,6 +525,7 @@ export function BuyerNavigator() {
             onOpenBooking={(bookingId) =>
               navigation.navigate('BookingDetail', { bookingId })
             }
+            onOpenProduct={(slug) => navigation.navigate('ProductDetail', { slug })}
           />
         )}
       </Stack.Screen>

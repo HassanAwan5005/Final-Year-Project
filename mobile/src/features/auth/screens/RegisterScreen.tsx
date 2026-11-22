@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import React, { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
-import { Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { ApiError } from '../../../api/client';
 import { Button } from '../../../components/ui/Button';
@@ -13,6 +13,7 @@ import { registerSchema, type RegisterForm } from '../schemas';
 
 interface Props {
   onGoLogin: () => void;
+  onRegistered: (email: string) => void;
 }
 
 const ROLES = [
@@ -30,7 +31,7 @@ const ROLES = [
   },
 ];
 
-export function RegisterScreen({ onGoLogin }: Props) {
+export function RegisterScreen({ onGoLogin, onRegistered }: Props) {
   const register = useAuthStore((s) => s.register);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -62,6 +63,8 @@ export function RegisterScreen({ onGoLogin }: Props) {
     setFormError(null);
     try {
       await register(values);
+      onRegistered(values.email.trim().toLowerCase());
+      Alert.alert('Account created', 'Please sign in to continue.');
     } catch (err) {
       if (err instanceof ApiError) {
         const fields = err.fieldErrors;

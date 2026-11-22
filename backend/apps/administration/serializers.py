@@ -288,6 +288,7 @@ class AdminProductSerializer(serializers.Serializer):
     created_at = serializers.DateTimeField()
     # What a moderator needs to judge a listing: its photos and description.
     description = serializers.CharField()
+    address = serializers.CharField()
     type_label = serializers.CharField(source="get_product_type_display")
     thumbnail_url = serializers.SerializerMethodField()
     preview_image_urls = serializers.SerializerMethodField()

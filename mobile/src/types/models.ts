@@ -519,12 +519,13 @@ export interface DigitalProduct {
   /** Loaded once per request by the view, not per card. */
   is_owned: boolean;
   is_wishlisted: boolean;
-  in_cart: boolean;
 }
 
 /** Mirrors ProductDetailSerializer. */
 export interface DigitalProductDetail extends DigitalProduct {
   description: string;
+  /** Blank on listings posted before the field existed. */
+  address: string;
   compatible_with: string[];
   tags: string[];
   preview_images: string[];
@@ -534,24 +535,6 @@ export interface DigitalProductDetail extends DigitalProduct {
   view_count: number;
   wishlist_count: number;
   published_at: string | null;
-}
-
-export interface CartLine {
-  id: number;
-  product: DigitalProduct;
-  /** False when the product was delisted or is already owned. */
-  is_available: boolean;
-  is_owned: boolean;
-  created_at: string;
-}
-
-export interface Cart {
-  items: CartLine[];
-  count: number;
-  subtotal: string;
-  total: string;
-  unavailable_count: number;
-  can_checkout: boolean;
 }
 
 export interface OrderItem {
@@ -579,7 +562,6 @@ export interface Order {
   subtotal: string;
   discount: string;
   total: string;
-  /** "COD" — every order is cash on delivery. */
   payment_method: string;
   delivery_address: string;
   delivery_phone: string;
@@ -613,6 +595,14 @@ export interface SellerProduct extends DigitalProduct {
   view_count: number;
   wishlist_count: number;
   total_revenue: string;
+}
+
+/** One of the seller's own ads, as the edit form needs it. */
+export interface SellerProductDetail extends SellerProduct {
+  description: string;
+  address: string;
+  /** `path` is the handle sent back to keep a photo. Cover first. */
+  photos: { path: string; url: string }[];
 }
 
 export interface SellerSummary {
@@ -793,6 +783,16 @@ export interface ConversationBookingRef {
   service_title: string;
 }
 
+/** The shop listing a thread is about. */
+export interface ConversationProductRef {
+  id: number;
+  slug: string;
+  title: string;
+  price: string;
+  thumbnail_url: string | null;
+  is_available: boolean;
+}
+
 export interface Conversation {
   id: number;
   other_participant: ChatParticipant | null;
@@ -804,6 +804,7 @@ export interface Conversation {
   is_blocked: boolean;
   is_archived: boolean;
   booking: ConversationBookingRef | null;
+  product: ConversationProductRef | null;
   created_at: string;
 }
 
@@ -1116,6 +1117,7 @@ export interface AdminListing {
   price: string;
   seller_name: string;
   description: string;
+  address: string;
   thumbnail_url: string | null;
   preview_image_urls: string[];
   is_published: boolean;

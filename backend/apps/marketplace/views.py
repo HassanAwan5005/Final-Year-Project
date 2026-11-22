@@ -31,11 +31,8 @@ from rest_framework.viewsets import GenericViewSet, ReadOnlyModelViewSet
 from apps.core.mixins import MessageResponseMixin, MultiSerializerMixin
 from apps.marketplace import selectors, services
 from apps.marketplace.filters import ProductFilterSet
-from apps.marketplace.models import CartItem, DigitalProduct
+from apps.marketplace.models import DigitalProduct
 from apps.marketplace.serializers import (
-    AddToCartSerializer,
-    CartSerializer,
-    CheckoutSerializer,
     DownloadRequestSerializer,
     DownloadTokenSerializer,
     OrderItemSerializer,
@@ -43,7 +40,9 @@ from apps.marketplace.serializers import (
     ProductDetailSerializer,
     ProductListSerializer,
     SellerProductCreateSerializer,
+    SellerProductDetailSerializer,
     SellerProductSerializer,
+    SellerProductUpdateSerializer,
     SellerSummarySerializer,
 )
 
@@ -77,9 +76,9 @@ class ProductViewSet(MessageResponseMixin, MultiSerializerMixin, ReadOnlyModelVi
 
     def get_serializer_context(self):
         """
-        Load ownership, wishlist and cart membership once per request.
+        Load ownership and wishlist membership once per request.
 
-        Three queries for the whole page instead of three per card. For an
+        Two queries for the whole page instead of two per card. For an
         anonymous caller they cost nothing at all.
         """
         context = super().get_serializer_context()
@@ -87,16 +86,11 @@ class ProductViewSet(MessageResponseMixin, MultiSerializerMixin, ReadOnlyModelVi
         if user.is_authenticated:
             from apps.wishlist.models import WishlistItem
 
-            from apps.marketplace.models import CartItem
-
             context["owned_ids"] = selectors.owned_product_ids(user)
             context["wishlisted_ids"] = set(
                 WishlistItem.objects.filter(
                     user=user, product__isnull=False
                 ).values_list("product_id", flat=True)
-            )
-            context["cart_ids"] = set(
-                CartItem.objects.filter(user=user).values_list("product_id", flat=True)
             )
         return context
 
@@ -140,7 +134,7 @@ class ProductViewSet(MessageResponseMixin, MultiSerializerMixin, ReadOnlyModelVi
         return Response(serializer.data)
 
     def retrieve(self, request, *args, **kwargs):
-        product = selectors.product_detail(kwargs["slug"])
+        product = selectors.product_detail(kwargs["slug"], request.user)
         if product is None:
             raise NotFound("This product is not available.")
 
@@ -172,86 +166,21 @@ class ProductViewSet(MessageResponseMixin, MultiSerializerMixin, ReadOnlyModelVi
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# CART
-# ═══════════════════════════════════════════════════════════════════════════
-@extend_schema(tags=["Marketplace"])
-class CartViewSet(MessageResponseMixin, MultiSerializerMixin, GenericViewSet):
-    """The server-side basket — it survives reinstalling the app."""
-
-    permission_classes = [IsAuthenticated]
-    serializer_class = CartSerializer
-    serializer_classes = {"add": AddToCartSerializer}
-    pagination_class = None
-    # Never queried — declared only so drf-spectacular can infer the model
-    # without calling get_queryset() with an AnonymousUser.
-    queryset = CartItem.objects.none()
-    success_messages = {
-        "list": "Cart retrieved",
-        "add": "Added to cart",
-        "remove": "Removed from cart",
-        "clear": "Cart cleared",
-    }
-
-    def _cart_response(self, request, status_code=http.HTTP_200_OK) -> Response:
-        summary = selectors.cart_summary(request.user)
-        return Response(
-            CartSerializer(summary, context=self.get_serializer_context()).data,
-            status=status_code,
-        )
-
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        user = self.request.user
-        if user.is_authenticated:
-            context["owned_ids"] = selectors.owned_product_ids(user)
-            context["cart_ids"] = set(
-                selectors.get_cart(user).values_list("product_id", flat=True)
-            )
-        return context
-
-    @extend_schema(summary="What is in the basket", responses=CartSerializer)
-    def list(self, request):
-        return self._cart_response(request)
-
-    @extend_schema(summary="Add a product", request=AddToCartSerializer)
-    @action(detail=False, methods=["post"])
-    def add(self, request):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        services.add_to_cart(request.user, serializer.validated_data["product"])
-        return self._cart_response(request, http.HTTP_201_CREATED)
-
-    @extend_schema(summary="Remove one product")
-    @action(detail=False, methods=["post"], url_path=r"remove/(?P<product_id>\d+)")
-    def remove(self, request, product_id=None):
-        services.remove_from_cart(request.user, int(product_id))
-        return self._cart_response(request)
-
-    @extend_schema(summary="Empty the basket")
-    @action(detail=False, methods=["post"])
-    def clear(self, request):
-        services.clear_cart(request.user)
-        return self._cart_response(request)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ORDERS, CHECKOUT AND DOWNLOADS
+# PAST ORDERS AND DOWNLOADS
 # ═══════════════════════════════════════════════════════════════════════════
 @extend_schema(tags=["Marketplace"])
 class OrderViewSet(MessageResponseMixin, MultiSerializerMixin, GenericViewSet):
-    """Checkout, receipts and the buyer's download library."""
+    """Receipts and downloads for orders placed before buying moved to chat."""
 
     permission_classes = [IsAuthenticated]
     serializer_class = OrderSerializer
     serializer_classes = {
-        "checkout": CheckoutSerializer,
         "purchases": OrderItemSerializer,
         "download": DownloadRequestSerializer,
     }
     success_messages = {
         "list": "Orders retrieved",
         "retrieve": "Order retrieved",
-        "checkout": "Purchase complete — your downloads are ready",
         "purchases": "Purchases retrieved",
         "download": "Download link ready",
     }
@@ -262,10 +191,6 @@ class OrderViewSet(MessageResponseMixin, MultiSerializerMixin, GenericViewSet):
 
             return Order.objects.none()
         return selectors.get_orders(self.request.user)
-
-    def get_throttles(self):
-        self.throttle_scope = "booking_create" if self.action == "checkout" else None
-        return super().get_throttles()
 
     @extend_schema(summary="Past orders")
     def list(self, request):
@@ -281,29 +206,6 @@ class OrderViewSet(MessageResponseMixin, MultiSerializerMixin, GenericViewSet):
             raise NotFound("Order not found.")
         return Response(
             OrderSerializer(order, context=self.get_serializer_context()).data
-        )
-
-    @extend_schema(
-        summary="Buy everything in the cart with the wallet",
-        description=(
-            "Send an `Idempotency-Key` header — any unique string per attempt. "
-            "A retry carrying the same key returns the order the first call "
-            "created instead of charging twice."
-        ),
-        request=CheckoutSerializer,
-        responses={201: OrderSerializer},
-    )
-    @action(detail=False, methods=["post"])
-    def checkout(self, request):
-        key = (request.headers.get("Idempotency-Key") or "").strip()[:64]
-        serializer = CheckoutSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        order = services.checkout(
-            request.user, idempotency_key=key, **serializer.validated_data
-        )
-        return Response(
-            OrderSerializer(order, context=self.get_serializer_context()).data,
-            status=http.HTTP_201_CREATED,
         )
 
     @extend_schema(
@@ -401,7 +303,7 @@ def download_file(request, token: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SELLER VIEW (read-only)
+# SELLER VIEW
 # ═══════════════════════════════════════════════════════════════════════════
 @extend_schema(tags=["Marketplace"])
 class SellerProductViewSet(MessageResponseMixin, GenericViewSet):
@@ -409,16 +311,19 @@ class SellerProductViewSet(MessageResponseMixin, GenericViewSet):
     A seller's own catalogue and sales — buyers and photographers alike.
 
     `create` lists a new product from the Sell screen. It goes into the admin
-    moderation queue and appears in the shop once approved.
+    moderation queue and appears in the shop once approved. `partial_update`
+    edits the whole ad, photos included (see `services.update_listing`).
     """
 
     permission_classes = [IsAuthenticated]
     serializer_class = SellerProductSerializer
     pagination_class = None
+    lookup_value_regex = r"\d+"
     queryset = DigitalProduct.objects.none()  # schema inference only
     success_messages = {
         "list": "Your products retrieved",
         "summary": "Sales summary retrieved",
+        "partial_update": "Your ad is updated",
         "create": "Submitted — your product will appear in the shop once approved",
     }
     parser_classes = [MultiPartParser, FormParser, JSONParser]
@@ -460,4 +365,39 @@ class SellerProductViewSet(MessageResponseMixin, GenericViewSet):
         return Response(
             SellerProductSerializer(product, context=self.get_serializer_context()).data,
             status=http.HTTP_201_CREATED,
+        )
+
+    def _own_product(self, pk) -> DigitalProduct:
+        product = selectors.seller_product(self._seller(), pk)
+        if product is None:
+            raise NotFound("Listing not found.")
+        return product
+
+    @extend_schema(
+        summary="One of your own listings, for the edit form",
+        responses=SellerProductDetailSerializer,
+    )
+    def retrieve(self, request, pk=None):
+        return Response(
+            SellerProductDetailSerializer(
+                self._own_product(pk), context=self.get_serializer_context()
+            ).data
+        )
+
+    @extend_schema(
+        summary="Edit your own ad, including its photos",
+        request=SellerProductUpdateSerializer,
+        responses=SellerProductDetailSerializer,
+    )
+    def partial_update(self, request, pk=None):
+        product = self._own_product(pk)
+        serializer = SellerProductUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        product = services.update_listing(
+            request.user, product.pk, **serializer.validated_data
+        )
+        return Response(
+            SellerProductDetailSerializer(
+                product, context=self.get_serializer_context()
+            ).data
         )

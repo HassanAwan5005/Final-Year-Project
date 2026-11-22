@@ -7,7 +7,7 @@ import { ForgotPasswordScreen } from '../features/auth/screens/ForgotPasswordScr
 import { colors } from '../theme';
 
 export type AuthStackParams = {
-  /** `email` is the account whose password was just reset. */
+  /** `email` is the account that was just created or had its password reset. */
   Login: { email?: string } | undefined;
   Register: undefined;
   ForgotPassword: undefined;
@@ -35,7 +35,12 @@ export function AuthNavigator() {
       </Stack.Screen>
 
       <Stack.Screen name="Register">
-        {({ navigation }) => <RegisterScreen onGoLogin={() => navigation.goBack()} />}
+        {({ navigation }) => (
+          <RegisterScreen
+            onGoLogin={() => navigation.goBack()}
+            onRegistered={(email) => navigation.popTo('Login', { email })}
+          />
+        )}
       </Stack.Screen>
 
       <Stack.Screen name="ForgotPassword">
