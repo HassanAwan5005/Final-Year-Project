@@ -332,7 +332,7 @@ function ChatThread({
             color={colors.gold}
             style={styles.encryptionIcon}
           />
-          <Text style={styles.encryptionText}>End-to-End Encrypted</Text>
+          <Text style={styles.encryptionText}>Messages are stored securely</Text>
         </View>
       </View>
 
