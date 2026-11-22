@@ -8,7 +8,7 @@ where photographers sell presets, LUTs and templates.
 
 | | |
 |---|---|
-| **Mobile** | React Native (Expo SDK 57) + TypeScript |
+| **Mobile** | React Native (Expo SDK 58) + TypeScript |
 | **Backend** | Django 5 + Django REST Framework + Channels (ASGI) |
 | **Database** | MySQL 8 |
 | **Cache / queue / realtime** | Redis 7 (3 logical DBs) |
