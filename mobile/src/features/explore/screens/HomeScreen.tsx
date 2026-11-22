@@ -27,7 +27,6 @@ import { NotificationBell } from '../../notifications/components/NotificationBel
 import { PhotographerCard } from '../components/PhotographerCard';
 import {
   useCategories,
-  useFeaturedPhotographers,
   useRecommendations,
   useTrendingPhotographers,
 } from '../hooks/usePhotographers';
@@ -60,7 +59,6 @@ export function HomeScreen({
   const recommendations = useRecommendations({ limit: 50 });
   const categories = useCategories();
   const trending = useTrendingPhotographers(user?.city);
-  const featured = useFeaturedPhotographers();
   const isBuyer = user?.role === 'BUYER';
 
   // Coming back from a photographer's profile: the personalised list follows
@@ -84,10 +82,9 @@ export function HomeScreen({
     await Promise.all([
       recommendations.refetch(),
       trending.refetch(),
-      featured.refetch(),
     ]);
     setRefreshing(false);
-  }, [recommendations, trending, featured]);
+  }, [recommendations, trending]);
 
   const openPhotographer = useCallback(
     (id: number, fromRecommendation: boolean) => {
@@ -374,22 +371,6 @@ export function HomeScreen({
                 />
               )}
             />
-          </>
-        ) : null}
-
-        {/* ─── Featured ────────────────────────────────────────────────── */}
-        {featured.data && featured.data.length > 0 ? (
-          <>
-            <SectionHeader title="Featured photographers" />
-            <View style={styles.list}>
-              {featured.data.slice(0, 5).map((photographer, index) => (
-                <PhotographerCard
-                  key={`feat-${photographer.id}-${index}`}
-                  photographer={photographer}
-                  onPress={() => openPhotographer(photographer.id, false)}
-                />
-              ))}
-            </View>
           </>
         ) : null}
 

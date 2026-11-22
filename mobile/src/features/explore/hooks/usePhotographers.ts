@@ -45,14 +45,6 @@ export function usePhotographerDetail(id: number | string | null) {
   });
 }
 
-export function useFeaturedPhotographers() {
-  return useQuery({
-    queryKey: qk.photographers.featured,
-    queryFn: () => photographersApi.featured(),
-    staleTime: 10 * 60_000,
-  });
-}
-
 export function useTrendingPhotographers(city?: string) {
   return useQuery({
     queryKey: qk.photographers.trending(city),

@@ -60,11 +60,6 @@ export const PhotographerCard = memo(function PhotographerCard({
             <Text style={styles.name} numberOfLines={1}>
               {photographer.display_name}
             </Text>
-            {photographer.is_featured ? (
-              <View style={styles.featuredPill}>
-                <Text style={styles.featuredText}>FEATURED</Text>
-              </View>
-            ) : null}
             {onToggleWishlist ? (
               <Pressable
                 onPress={onToggleWishlist}
@@ -184,18 +179,6 @@ const styles = StyleSheet.create({
   body: { flex: 1, gap: 3 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   name: { ...typography.bodyBold, color: colors.text, flexShrink: 1 },
-  featuredPill: {
-    backgroundColor: colors.goldDim,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: radius.sm,
-  },
-  featuredText: {
-    fontSize: 8,
-    fontWeight: '800',
-    color: colors.goldLight,
-    letterSpacing: 0.5,
-  },
   tagline: { ...typography.caption, color: colors.sub },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' },
   meta: { ...typography.tiny, color: colors.sub },

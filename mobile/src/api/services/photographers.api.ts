@@ -71,12 +71,6 @@ export const photographersApi = {
     return unwrap<PhotographerDetail>(api.get(ENDPOINTS.photographers.detail(id)));
   },
 
-  featured() {
-    return unwrap<PhotographerSummary[]>(
-      api.get(`${ENDPOINTS.photographers.list}featured/`),
-    );
-  },
-
   trending(city?: string) {
     return unwrap<PhotographerSummary[]>(
       api.get(`${ENDPOINTS.photographers.list}trending/`, {
