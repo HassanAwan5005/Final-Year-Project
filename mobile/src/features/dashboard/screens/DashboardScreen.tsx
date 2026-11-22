@@ -15,7 +15,7 @@ import { useMyProfile } from '../../shop/hooks/useShop';
 import { colors, radius, spacing, typography } from '../../../theme';
 import { EmptyState, ErrorState, LoadingState } from '../../../components/feedback/States';
 import type { BookingSummary, PhotographerSelfProfile } from '../../../types/models';
-import { formatDate, formatPKR } from '../../../utils/format';
+import { formatDate, formatPKR, formatStart, packageDays } from '../../../utils/format';
 
 export function DashboardScreen() {
   const user = useAuthStore((s) => s.user);
@@ -202,7 +202,8 @@ function UpcomingShootCard({ booking }: { booking: BookingSummary }) {
         <View style={styles.shootInfo}>
           <Text style={styles.shootDate}>{formatDate(booking.event_date)}</Text>
           <Text style={styles.shootTime}>
-            {booking.start_time.slice(0, 5)} · {booking.duration_hours}h
+            {formatStart(booking)}
+            {packageDays(booking.duration_hours) ? '' : ` · ${booking.duration_hours}h`}
           </Text>
         </View>
         <Text style={styles.shootPrice}>{formatPKR(booking.total_price)}</Text>

@@ -18,7 +18,7 @@ import { Avatar } from '../../../components/ui/Avatar';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { colors, radius, spacing, typography } from '../../../theme';
-import { formatDate, formatPKR, timeAgo } from '../../../utils/format';
+import { formatDate, formatPKR, formatStart, packageDays, timeAgo } from '../../../utils/format';
 import type { BookingSummary } from '../../../types/models';
 import {
   useAcceptBooking,
@@ -59,7 +59,8 @@ export function RequestsScreen({
   const confirmAccept = (booking: BookingSummary) => {
     Alert.alert(
       'Accept this booking?',
-      `${formatDate(booking.event_date)} at ${booking.start_time.slice(0, 5)} — ` +
+      `${formatDate(booking.event_date)} ` +
+        `${packageDays(booking.duration_hours) ? 'for' : 'at'} ${formatStart(booking)} — ` +
         `${booking.location_city}. The date will be blocked on your calendar.`,
       [
         { text: 'Not now', style: 'cancel' },
@@ -215,7 +216,11 @@ function RequestCard({
         <Fact icon="calendar-outline" text={formatDate(booking.event_date)} />
         <Fact
           icon="time-outline"
-          text={`${booking.start_time.slice(0, 5)} · ${booking.duration_hours}h`}
+          text={
+            packageDays(booking.duration_hours)
+              ? formatStart(booking)
+              : `${formatStart(booking)} · ${booking.duration_hours}h`
+          }
         />
         <Fact icon="location-outline" text={booking.location_city} />
       </View>

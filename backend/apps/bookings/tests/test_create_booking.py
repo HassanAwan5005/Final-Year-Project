@@ -5,7 +5,9 @@ The transition tests live in test_state_machine.py; this file is about getting
 a booking into existence correctly in the first place.
 """
 
-from datetime import time, timedelta
+from datetime import date as date_cls
+from datetime import datetime, time, timedelta
+from datetime import timezone as dt_timezone
 from decimal import Decimal
 
 import pytest
@@ -19,6 +21,12 @@ from apps.core.exceptions import BusinessRuleViolation, ConflictError
 from conftest import working_date
 
 pytestmark = pytest.mark.django_db
+
+
+def _set_length(service, hours: int) -> None:
+    """Make the photographer's service a shoot of this many hours."""
+    service.duration_hours = hours
+    service.save(update_fields=["duration_hours"])
 
 
 def _set_daily_capacity(photographer, date, capacity: int) -> None:
@@ -245,14 +253,25 @@ def test_refuses_a_date_inside_the_minimum_lead_time(make_booking):
         make_booking(event_date=timezone.localdate())
 
 
-def test_refuses_a_weekday_the_photographer_does_not_work(make_booking, photographer):
-    """The seeded calendar has Sunday off."""
+def test_refuses_a_weekday_the_photographer_does_not_work(
+    make_booking, photographer, event_date
+):
+    from apps.availability.models import AvailabilityRule
+
+    AvailabilityRule.objects.filter(
+        photographer=photographer, weekday=event_date.weekday()
+    ).update(is_available=False)
+
+    with pytest.raises(BusinessRuleViolation, match=f"does not work on {event_date:%A}s"):
+        make_booking(event_date=event_date)
+
+
+def test_a_sunday_can_be_booked(make_booking):
     sunday = working_date(7)
     while sunday.weekday() != 6:
         sunday += timedelta(days=1)
 
-    with pytest.raises(BusinessRuleViolation, match="does not work on Sundays"):
-        make_booking(event_date=sunday)
+    assert make_booking(event_date=sunday).event_date == sunday
 
 
 def test_refuses_a_blacked_out_date(make_booking, photographer, event_date):
@@ -269,16 +288,29 @@ def test_refuses_a_blacked_out_date(make_booking, photographer, event_date):
         make_booking()
 
 
-def test_one_shoot_per_day_by_default(make_booking, other_buyer):
-    """
-    The seeded calendar sets `max_bookings=1`, so a second booking on the same
-    date is refused even at a completely different time. Capacity is checked
-    before the exact slot, because "fully booked" is the more useful message.
-    """
+def test_a_free_hour_on_a_booked_date_can_still_be_booked(make_booking, other_buyer, service):
+    """A booking blocks its own hours (14:00-22:00), not the whole date."""
     make_booking()
 
-    with pytest.raises(BusinessRuleViolation, match="Fully booked"):
-        make_booking(buyer=other_buyer, start_time=time(18, 0))
+    _set_length(service, 2)
+    second = make_booking(buyer=other_buyer, start_time=time(22, 0))
+    assert second.status == BookingStatus.PENDING
+
+
+def test_refuses_a_shoot_overlapping_one_from_the_night_before(
+    make_booking, other_buyer, event_date
+):
+    first = make_booking(event_date=event_date)
+    Booking.objects.filter(pk=first.pk).update(  # as older data can contain
+        start_time=time(22, 0), duration_hours=4
+    )
+
+    with pytest.raises(ConflictError, match="already booked"):
+        make_booking(
+            buyer=other_buyer,
+            event_date=event_date + timedelta(days=1),
+            start_time=time(1, 0),
+        )
 
 
 def test_refuses_a_slot_that_is_already_taken(make_booking, other_buyer, photographer, event_date):
@@ -308,12 +340,12 @@ def test_refuses_overlapping_shoot_time(make_booking, other_buyer, photographer,
         make_booking(buyer=other_buyer, start_time=time(15, 0), duration_hours=2)
 
 
-def test_a_second_booking_at_another_time_is_allowed_when_capacity_permits(
-    make_booking, other_buyer, photographer, event_date
+def test_a_second_booking_at_another_time_is_allowed_when_it_fits(
+    make_booking, other_buyer
 ):
-    _set_daily_capacity(photographer, event_date, 2)
+    """Two 8-hour shoots on one date: 14:00-22:00, then 06:00-14:00."""
     first = make_booking()
-    second = make_booking(buyer=other_buyer, start_time=time(18, 0))
+    second = make_booking(buyer=other_buyer, start_time=time(6, 0))
 
     assert first.pk != second.pk
     assert second.status == BookingStatus.PENDING
@@ -388,3 +420,129 @@ def test_a_failed_attempt_releases_its_key(make_booking, photographer):
 
     booking = make_booking(idempotency_key="retry-me")
     assert booking.status == BookingStatus.PENDING
+
+
+def test_refuses_an_hour_inside_the_notice_period(make_booking, monkeypatch):
+    """Same date, but 14:00 is under 24 hours away and 16:00 is not."""
+    # 15:30 on Monday in Pakistan.
+    now = datetime(2027, 3, 1, 10, 30, tzinfo=dt_timezone.utc)
+    monkeypatch.setattr(timezone, "now", lambda: now)
+    tuesday = date_cls(2027, 3, 2)
+
+    with pytest.raises(BusinessRuleViolation, match="hours' notice"):
+        make_booking(event_date=tuesday, start_time=time(14, 0))
+
+    assert make_booking(event_date=tuesday, start_time=time(16, 0)).pk
+
+
+def test_refuses_a_shoot_inside_a_part_day_block(make_booking, photographer, event_date):
+    from apps.availability.models import BlackoutDate
+
+    BlackoutDate.objects.create(
+        photographer=photographer, start_date=event_date, end_date=event_date,
+        is_full_day=False, start_time=time(9, 0), end_time=time(12, 0),
+    )
+
+    with pytest.raises(BusinessRuleViolation, match="unavailable at that time"):
+        make_booking(start_time=time(10, 0))
+
+    assert make_booking(start_time=time(12, 0)).pk
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SHOOT LENGTH
+# ═══════════════════════════════════════════════════════════════════════════
+@pytest.mark.parametrize("hours", [3, 6, 10])
+def test_a_booking_always_takes_the_services_full_length(make_booking, service, hours):
+    """A caller cannot shrink a fixed-price shoot to squeeze it in."""
+    _set_length(service, hours)
+
+    assert make_booking(start_time=time(9, 0), duration_hours=1).duration_hours == hours
+
+
+def test_refuses_a_6_hour_shoot_when_4_hours_are_left(
+    make_booking, other_buyer, service
+):
+    _set_length(service, 20)
+    make_booking(start_time=time(0, 0))  # 20:00-24:00 is left
+
+    _set_length(service, 6)
+    with pytest.raises(BusinessRuleViolation, match="Only 4 hours in a row left"):
+        make_booking(buyer=other_buyer, start_time=time(20, 0))
+
+    _set_length(service, 3)
+    assert make_booking(buyer=other_buyer, start_time=time(20, 0)).pk
+
+
+def test_refuses_a_shoot_that_runs_past_midnight(make_booking, service):
+    _set_length(service, 6)
+    with pytest.raises(BusinessRuleViolation, match="would not finish"):
+        make_booking(start_time=time(19, 0))
+
+    assert make_booking(start_time=time(18, 0)).end_time == time(0, 0)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 1 AND 2 DAY PACKAGES
+# ═══════════════════════════════════════════════════════════════════════════
+@pytest.mark.parametrize("hours, days", [(24, 1), (48, 2)])
+def test_a_day_package_books_whole_days(make_booking, service, event_date, hours, days):
+    """Whatever time is sent, the booking starts at midnight."""
+    _set_length(service, hours)
+    booking = make_booking(start_time=time(15, 0))
+
+    assert booking.start_time == time(0, 0)
+    assert booking.duration_hours == hours
+    assert booking.last_date == event_date + timedelta(days=days - 1)
+    assert booking.total_price == service.price
+
+
+def test_a_day_package_notification_has_no_time(make_booking, service, photographer):
+    from apps.notifications.models import Notification
+
+    _set_length(service, 48)
+    make_booking()
+
+    body = Notification.objects.get(
+        recipient=photographer.user, notification_type="BOOKING_REQUEST"
+    ).body
+    assert "for 2 days" in body and "00:00" not in body
+
+
+def test_refuses_a_shoot_on_the_second_day_of_a_package(
+    make_booking, other_buyer, service, event_date
+):
+    _set_length(service, 48)
+    make_booking()
+
+    _set_length(service, 3)
+    with pytest.raises(BusinessRuleViolation, match="Fully booked"):
+        make_booking(buyer=other_buyer, event_date=event_date + timedelta(days=1))
+
+
+def test_refuses_a_day_package_when_an_hour_is_taken(
+    make_booking, other_buyer, service, event_date
+):
+    _set_length(service, 3)
+    make_booking(event_date=event_date + timedelta(days=1))
+
+    _set_length(service, 48)
+    with pytest.raises(BusinessRuleViolation, match="not completely free"):
+        make_booking(buyer=other_buyer)
+
+    _set_length(service, 24)
+    assert make_booking(buyer=other_buyer).pk
+
+
+def test_a_2_day_package_cannot_be_completed_on_its_first_day(
+    make_booking, service, photographer
+):
+    from apps.bookings.services import accept_booking, complete_booking
+
+    _set_length(service, 48)
+    booking = accept_booking(make_booking(), photographer.user)
+    booking.event_date = timezone.localdate()
+    booking.save(update_fields=["event_date"])
+
+    with pytest.raises(BusinessRuleViolation, match="not happened yet"):
+        complete_booking(booking, photographer.user)

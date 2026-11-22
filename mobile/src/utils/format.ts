@@ -84,6 +84,27 @@ export function formatDate(iso: string | null | undefined): string {
   });
 }
 
+/** 1 or 2 for a day package (24h / 48h), 0 for a shoot measured in hours. */
+export function packageDays(hours: number): number {
+  return hours > 0 && hours % 24 === 0 ? hours / 24 : 0;
+}
+
+/** "6h", or "1 day" / "2 days" for a day package. */
+export function formatDuration(hours: number): string {
+  const days = packageDays(hours);
+  return days ? `${days} day${days === 1 ? '' : 's'}` : `${hours}h`;
+}
+
+/** "14:00", or "2 days" — a day package has no start time to show. */
+export function formatStart(booking: {
+  start_time: string;
+  duration_hours: number;
+}): string {
+  return packageDays(booking.duration_hours)
+    ? formatDuration(booking.duration_hours)
+    : booking.start_time.slice(0, 5);
+}
+
 /** "ZM" — initials for the avatar placeholder. */
 export function initials(name: string | null | undefined): string {
   if (!name) return '?';

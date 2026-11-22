@@ -81,8 +81,12 @@ def test_a_past_date_is_rejected(buyer_client, service):
 def test_a_full_day_returns_400_with_an_explanation(
     buyer_client, other_buyer_client, service, event_date
 ):
-    """The seeded calendar allows one shoot per day."""
-    buyer_client.post(URL, _payload(service, event_date), format="json")
+    """A shoot covering all 24 hours leaves nothing to book."""
+    service.duration_hours = 24
+    service.save(update_fields=["duration_hours"])
+    buyer_client.post(
+        URL, _payload(service, event_date, start_time="00:00"), format="json"
+    )
     response = other_buyer_client.post(
         URL, _payload(service, event_date, start_time="18:00"), format="json"
     )
@@ -283,7 +287,13 @@ def test_a_stranger_cannot_act_on_a_booking(other_buyer_client, booking):
 # ═══════════════════════════════════════════════════════════════════════════
 # AVAILABILITY API
 # ═══════════════════════════════════════════════════════════════════════════
-def test_calendar_marks_sunday_off(api_client, photographer):
+def test_calendar_marks_a_day_off(api_client, photographer, event_date):
+    from apps.availability.models import AvailabilityRule
+
+    AvailabilityRule.objects.filter(
+        photographer=photographer, weekday=event_date.weekday()
+    ).update(is_available=False)
+
     response = api_client.get(
         f"/api/v1/availability/photographers/{photographer.pk}/?days=14"
     )
@@ -292,8 +302,8 @@ def test_calendar_marks_sunday_off(api_client, photographer):
     days = response.json()["data"]["days"]
     assert len(days) == 14
 
-    sundays = [d for d in days if d["reason"] == "WEEKLY_OFF"]
-    assert sundays and all("Sunday" in d["message"] for d in sundays)
+    off = [d for d in days if d["reason"] == "WEEKLY_OFF"]
+    assert off and all(f"{event_date:%A}" in d["message"] for d in off)
 
 
 def test_calendar_marks_a_booked_date(api_client, photographer, booking):
@@ -306,9 +316,21 @@ def test_calendar_marks_a_booked_date(api_client, photographer, booking):
         if d["date"] == booking.event_date.isoformat()
     )
 
-    assert day["is_available"] is False
-    assert day["reason"] == "FULLY_BOOKED"
+    assert day["is_available"] is True
     assert "14:00" in day["booked_times"]
+
+
+def test_calendar_marks_dates_too_short_for_the_shoot(api_client, photographer, booking):
+    """Booked 14:00-22:00, so the longest stretch left is 14 hours."""
+    url = f"/api/v1/availability/photographers/{photographer.pk}/?days=30"
+
+    def day_for(hours):
+        days = api_client.get(f"{url}&duration_hours={hours}").json()["data"]["days"]
+        return next(d for d in days if d["date"] == booking.event_date.isoformat())
+
+    assert day_for(14)["is_available"] is True
+    assert day_for(15)["is_available"] is False
+    assert day_for(15)["reason"] == "NOT_ENOUGH_HOURS"
 
 
 def test_day_endpoint_offers_start_times(api_client, photographer):
@@ -321,10 +343,22 @@ def test_day_endpoint_offers_start_times(api_client, photographer):
     assert response.status_code == 200
     body = response.json()["data"]
     assert body["is_available"] is True
-    assert body["available_start_times"][0] == "09:00"
-    assert "14:00" in body["available_start_times"]
+    assert body["available_start_times"] == [f"{hour:02d}:00" for hour in range(21)]
 
 
 def test_day_endpoint_requires_a_date(api_client, photographer):
     response = api_client.get(f"/api/v1/availability/photographers/{photographer.pk}/day/")
     assert response.status_code == 400
+
+
+def test_the_app_can_book_a_2_day_package(buyer_client, service, event_date):
+    service.duration_hours = 48
+    service.save(update_fields=["duration_hours"])
+
+    response = buyer_client.post(
+        URL,
+        _payload(service, event_date, start_time="00:00", duration_hours=48),
+        format="json",
+    )
+    assert response.status_code == 201
+    assert response.json()["data"]["duration_hours"] == 48

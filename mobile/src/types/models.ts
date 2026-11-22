@@ -318,6 +318,7 @@ export type UnavailableReason =
   | 'BLACKOUT'
   | 'FULLY_BOOKED'
   | 'NOT_ACCEPTING'
+  | 'NOT_ENOUGH_HOURS'
   | '';
 
 export interface AvailabilityDay {

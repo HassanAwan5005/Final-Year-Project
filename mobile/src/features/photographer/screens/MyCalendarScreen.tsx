@@ -26,8 +26,6 @@ import {
   useSaveSchedule,
 } from '../hooks/useMyStudio';
 
-const HOURS = Array.from({ length: 15 }, (_, i) => `${String(i + 6).padStart(2, '0')}:00`);
-
 /**
  * The photographer's working calendar.
  *
@@ -145,7 +143,7 @@ export function MyCalendarScreen({ onBack }: { onBack: () => void }) {
         {/* ─── Weekly pattern ──────────────────────────────────────────── */}
         <Text style={styles.sectionTitle}>Working week</Text>
         <Text style={styles.sectionHint}>
-          Buyers can only request dates that match this pattern.
+          Buyers can request any free hour on the days you work.
         </Text>
 
         <View style={styles.week}>
@@ -262,8 +260,6 @@ function DayRow({
   rule: AvailabilityRule;
   onChange: (weekday: number, patch: Partial<AvailabilityRule>) => void;
 }) {
-  const [picking, setPicking] = useState<'start' | 'end' | null>(null);
-
   return (
     <View style={styles.dayRow}>
       <View style={styles.dayTop}>
@@ -279,56 +275,10 @@ function DayRow({
       </View>
 
       {rule.is_available ? (
-        <View style={styles.dayDetail}>
-          <Pressable
-            onPress={() => setPicking(picking === 'start' ? null : 'start')}
-            style={styles.timeButton}
-          >
-            <Text style={styles.timeText}>{rule.start_time}</Text>
-          </Pressable>
-          <Text style={styles.dash}>–</Text>
-          <Pressable
-            onPress={() => setPicking(picking === 'end' ? null : 'end')}
-            style={styles.timeButton}
-          >
-            <Text style={styles.timeText}>{rule.end_time}</Text>
-          </Pressable>
-
-          <Pressable
-            onPress={() =>
-              onChange(rule.weekday, {
-                max_bookings: rule.max_bookings >= 3 ? 1 : rule.max_bookings + 1,
-              })
-            }
-            style={styles.slotsButton}
-            accessibilityLabel={`${rule.max_bookings} shoots per day`}
-          >
-            <Ionicons name="albums-outline" size={13} color={colors.sub} />
-            <Text style={styles.slotsText}>
-              {rule.max_bookings} {rule.max_bookings === 1 ? 'shoot' : 'shoots'}
-            </Text>
-          </Pressable>
-        </View>
+        <Text style={styles.dayOffText}>Open 24 hours</Text>
       ) : (
         <Text style={styles.dayOffText}>Not working</Text>
       )}
-
-      {picking ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hours}>
-          {HOURS.map((hour) => (
-            <Pressable
-              key={hour}
-              onPress={() => {
-                onChange(rule.weekday, { [picking + '_time']: hour } as never);
-                setPicking(null);
-              }}
-              style={styles.hourChip}
-            >
-              <Text style={styles.hourText}>{hour}</Text>
-            </Pressable>
-          ))}
-        </ScrollView>
-      ) : null}
     </View>
   );
 }
@@ -415,44 +365,6 @@ const styles = StyleSheet.create({
   dayName: { ...typography.bodyBold, color: colors.text },
   dayOff: { color: colors.dim },
   dayOffText: { ...typography.tiny, color: colors.dim, marginTop: 2 },
-  dayDetail: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  timeButton: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.borderMid,
-    backgroundColor: colors.surface,
-  },
-  timeText: { ...typography.caption, color: colors.text },
-  dash: { color: colors.dim },
-  slotsButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    marginLeft: 'auto',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
-    borderRadius: radius.pill,
-    backgroundColor: colors.surface,
-  },
-  slotsText: { ...typography.tiny, color: colors.sub },
-  hours: { marginTop: spacing.sm },
-  hourChip: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
-    borderRadius: radius.sm,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginRight: spacing.xs,
-  },
-  hourText: { ...typography.tiny, color: colors.text },
   blackoutHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',

@@ -20,7 +20,7 @@ class DayAvailabilitySerializer(serializers.Serializer):
     reason = serializers.CharField(
         read_only=True,
         help_text="PAST | TOO_SOON | WEEKLY_OFF | BLACKOUT | FULLY_BOOKED | "
-                  "NOT_ACCEPTING — empty when the date is available.",
+                  "NOT_ACCEPTING | NOT_ENOUGH_HOURS — empty when the date is available.",
     )
     message = serializers.CharField(read_only=True)
     booked_times = serializers.ListField(child=serializers.CharField(), read_only=True)

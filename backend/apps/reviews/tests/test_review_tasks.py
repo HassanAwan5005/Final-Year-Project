@@ -192,8 +192,6 @@ def test_the_scan_is_bounded(buyer, photographer, category, make_booking):
     from apps.reviews import services
 
     for index in range(3):
-        # `working_date` skips Sundays: the seeded calendar has them off, so a
-        # raw date arithmetic would fail for a reason unrelated to this test.
         booking = make_booking(event_date=working_date(10 + index * 3))
         accept_booking(booking, photographer.user)
         _shoot_was(booking, days_ago=1)

@@ -87,6 +87,11 @@ class PhotographerAvailabilityViewSet(MessageResponseMixin, GenericViewSet):
                 description=f"Window length, 1-{selectors.MAX_WINDOW_DAYS} "
                             f"(default {selectors.DEFAULT_WINDOW_DAYS})",
             ),
+            OpenApiParameter(
+                "duration_hours", int,
+                description="Shoot length. Dates without that many free hours in "
+                            "a row are marked NOT_ENOUGH_HOURS",
+            ),
         ],
         responses=AvailabilityCalendarSerializer,
     )
@@ -95,7 +100,11 @@ class PhotographerAvailabilityViewSet(MessageResponseMixin, GenericViewSet):
         start = _parse_date(request.query_params.get("start"), "start")
         days = _parse_int(request.query_params.get("days"), "days")
 
-        calendar = selectors.availability_calendar(photographer, start=start, days=days)
+        duration = _parse_int(request.query_params.get("duration_hours"), "duration_hours")
+
+        calendar = selectors.availability_calendar(
+            photographer, start=start, days=days, duration_hours=duration
+        )
         payload = {
             "photographer_id": photographer.pk,
             "start_date": calendar[0].date,
@@ -112,8 +121,8 @@ class PhotographerAvailabilityViewSet(MessageResponseMixin, GenericViewSet):
             OpenApiParameter("date", str, required=True, description="YYYY-MM-DD"),
             OpenApiParameter(
                 "duration_hours", int,
-                description="Shoot length, so late starts that would overrun the "
-                            "photographer's day are excluded (default 4)",
+                description="Shoot length, so starts that would overlap a booking or "
+                            "run past midnight are excluded (default 4)",
             ),
         ],
         responses=DayDetailSerializer,
@@ -126,7 +135,7 @@ class PhotographerAvailabilityViewSet(MessageResponseMixin, GenericViewSet):
             raise ValidationError({"date": "This query parameter is required."})
         duration = _parse_int(request.query_params.get("duration_hours"), "duration_hours", 4)
 
-        day = selectors.day_availability(photographer, date)
+        day = selectors.day_availability(photographer, date, duration or 4)
         payload = {
             **asdict(day),
             "available_start_times": selectors.suggested_start_times(

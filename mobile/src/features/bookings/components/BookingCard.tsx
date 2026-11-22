@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Avatar } from '../../../components/ui/Avatar';
 import { colors, radius, spacing, typography } from '../../../theme';
-import { formatDate, formatPKR } from '../../../utils/format';
+import { formatDate, formatPKR, formatStart } from '../../../utils/format';
 import type { BookingSummary } from '../../../types/models';
 import { StatusPill } from './StatusPill';
 
@@ -53,7 +53,7 @@ export function BookingCard({
           <View style={styles.metaRow}>
             <Ionicons name="calendar-outline" size={13} color={colors.sub} />
             <Text style={styles.meta}>
-              {formatDate(booking.event_date)} · {shortTime(booking.start_time)}
+              {formatDate(booking.event_date)} · {formatStart(booking)}
             </Text>
           </View>
 
@@ -82,10 +82,6 @@ export function BookingCard({
 }
 
 /** "14:00" from "14:00:00" — seconds are noise on a card. */
-function shortTime(value: string): string {
-  return value?.slice(0, 5) ?? '';
-}
-
 /**
  * The one line that tells a user whether they need to do something.
  *

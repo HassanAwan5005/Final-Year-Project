@@ -53,7 +53,7 @@ def _ensure_notification_preference(user) -> None:
 
 def _seed_default_availability(profile: PhotographerProfile) -> None:
     """
-    Give new photographers a sensible Mon-Sat 9-6 calendar.
+    Give new photographers a calendar that is open every day of the week.
 
     Without this a brand-new photographer appears fully unavailable and can
     never receive a first booking — a silent dead end immediately after signup.
@@ -65,11 +65,7 @@ def _seed_default_availability(profile: PhotographerProfile) -> None:
 
     AvailabilityRule.objects.bulk_create(
         [
-            AvailabilityRule(
-                photographer=profile,
-                weekday=day,
-                is_available=day != 6,  # Sunday off by default
-            )
+            AvailabilityRule(photographer=profile, weekday=day)
             for day in range(7)
         ]
     )

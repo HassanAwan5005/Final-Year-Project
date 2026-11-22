@@ -202,6 +202,7 @@ def test_anonymous_is_refused(api_client):
         ("price", "0.00", "above zero"),
         ("title", "Hi", "descriptive title"),
         ("min_hours", 9, "cannot exceed"),
+        ("duration_hours", 25, "up to 24 hours"),
     ],
 )
 def test_validation(photographer_client, category, field, value, fragment):
@@ -211,6 +212,32 @@ def test_validation(photographer_client, category, field, value, fragment):
 
     assert response.status_code == 400
     assert fragment in response.json()["message"]
+
+
+@pytest.mark.parametrize("hours", [24, 48])
+def test_a_day_package_is_allowed(photographer_client, category, hours):
+    response = photographer_client.post(
+        URL, payload(category=category.pk, duration_hours=hours), format="json"
+    )
+    assert response.status_code == 201
+
+
+def test_an_edit_cannot_raise_the_length_past_24_hours(photographer_client, service):
+    response = photographer_client.patch(
+        f"{URL}{service.pk}/", {"duration_hours": 25}, format="json"
+    )
+    assert response.status_code == 400
+    assert "up to 24 hours" in response.json()["message"]
+
+
+def test_a_tier_longer_than_24_hours_is_refused(photographer_client, service):
+    response = photographer_client.post(
+        f"{URL}{service.pk}/packages/",
+        {"name": "Platinum", "price": "120000.00", "duration_hours": 25},
+        format="json",
+    )
+    assert response.status_code == 400
+    assert "up to 24 hours" in response.json()["message"]
 
 
 def test_includes_is_coerced_to_a_clean_list(photographer_client, category):

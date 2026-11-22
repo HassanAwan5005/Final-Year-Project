@@ -15,6 +15,7 @@ TWO DESIGN DECISIONS WORTH DEFENDING
    during a dispute. BookingStatusHistory is append-only and answers them.
 """
 
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import models
@@ -26,6 +27,7 @@ from apps.bookings.constants import (
     CancellationReason,
     PaymentMethod,
     PaymentStatus,
+    package_days,
 )
 from apps.core.models import BaseModel, TimeStampedModel, UUIDModel
 
@@ -219,6 +221,13 @@ class Booking(UUIDModel, BaseModel):
     @property
     def is_reviewable(self) -> bool:
         return self.status == BookingStatus.COMPLETED and not self.has_review
+
+    @property
+    def last_date(self):
+        """The final date of the shoot — later than `event_date` for 2 days."""
+        return self.event_date + timedelta(
+            days=max(package_days(self.duration_hours) - 1, 0)
+        )
 
     @property
     def days_until_event(self) -> int:

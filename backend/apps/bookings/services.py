@@ -35,7 +35,7 @@ FOUR THINGS THIS FILE GUARANTEES
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django.conf import settings
@@ -47,6 +47,7 @@ from apps.bookings.constants import (
     BookingStatus,
     CancellationReason,
     can_transition,
+    package_days,
 )
 from apps.bookings.models import Booking, BookingPayment, BookingStatusHistory
 from apps.core.constants import UserRole
@@ -184,6 +185,8 @@ def _create_booking_locked(
 
     # ─── Price snapshot ──────────────────────────────────────────────────────
     unit_price, quantity, hours = _price_snapshot(service, package, duration_hours)
+    if package_days(hours):
+        start_time = time(0, 0)  # the whole day is booked, so there is no choice
     _assert_slot_available(photographer, event_date, start_time, hours)
 
     booking = Booking(
@@ -233,7 +236,7 @@ def _create_booking_locked(
         title="New booking request",
         body=(
             f"{buyer.full_name} wants to book {service.title} on "
-            f"{event_date:%d %b %Y} at {start_time:%H:%M}."
+            f"{event_date:%d %b %Y} {_time_text(booking)}."
         ),
         action_screen="BookingDetail",
         action_id=str(booking.pk),
@@ -429,14 +432,14 @@ def complete_booking(booking: Booking, actor, *, note: str = "") -> Booking:
     """
     The shoot happened.
 
-    Refused before the event date: a booking cannot be completed before it has
+    Refused before the event (its last day, for a 2-day package): a booking cannot be completed before it has
     taken place, and allowing it would let a photographer close a job early to
     unlock the review prompt.
     """
-    if booking.event_date > timezone.localdate():
+    if booking.last_date > timezone.localdate():
         raise BusinessRuleViolation(
             "This shoot has not happened yet. It can be marked complete from "
-            f"{booking.event_date:%d %b %Y}."
+            f"{booking.last_date:%d %b %Y}."
         )
 
     role = actor_role_for(booking, actor)
@@ -506,29 +509,44 @@ def _assert_slot_available(
     photographer, event_date, start_time, duration_hours: int = 4
 ) -> None:
     """
-    Weekday rule, blackout, capacity — then full time interval overlap check.
+    Weekday rule, blackout, notice — then full time interval overlap check.
 
     Runs while the photographer row is locked, so its answer is still true by
     the time the INSERT lands.
     """
     from apps.availability import selectors as availability
 
-    day = availability.day_availability(photographer, event_date)
+    hours = duration_hours or 4
+    day = availability.day_availability(photographer, event_date, hours)
     if not day.is_available:
         raise BusinessRuleViolation(day.message)
+    if package_days(hours):
+        return  # every date it needs was just checked to be completely free
 
-    ref_date = datetime(2000, 1, 1).date()
-    new_start = datetime.combine(ref_date, start_time)
-    new_end = new_start + timedelta(hours=max(duration_hours or 4, 1))
+    if datetime.combine(event_date, start_time) < availability.earliest_bookable_start():
+        raise BusinessRuleViolation(
+            f"Bookings need at least {settings.BOOKING_MIN_LEAD_HOURS} hours' notice."
+        )
 
-    for b_start, b_duration in day.booked_intervals:
-        b_dt_start = datetime.combine(ref_date, b_start)
-        b_dt_end = b_dt_start + timedelta(hours=max(b_duration, 1))
-        if new_start < b_dt_end and new_end > b_dt_start:
-            raise ConflictError(
-                f"{start_time:%H:%M} on {event_date:%d %b} is already booked (overlaps with an existing booking "
-                f"from {b_start:%H:%M} to {b_dt_end.time():%H:%M}). Please choose another time."
-            )
+    if not availability.finishes_same_day(start_time, hours):
+        raise BusinessRuleViolation(
+            f"This {hours}-hour shoot starting at {start_time:%H:%M} would not finish on "
+            f"{event_date:%d %b}. Please choose an earlier time."
+        )
+
+    blocked = availability.blocked_spans_on(photographer, event_date)
+    if availability.find_clash(blocked, event_date, start_time, hours) is not None:
+        raise BusinessRuleViolation(
+            "The photographer is unavailable at that time. Please choose another time."
+        )
+
+    spans = availability.booked_spans_on(photographer, event_date)
+    clash = availability.find_clash(spans, event_date, start_time, hours)
+    if clash is not None:
+        raise ConflictError(
+            f"{start_time:%H:%M} on {event_date:%d %b} is already booked (overlaps with an existing booking "
+            f"from {clash[0]:%H:%M} to {clash[1]:%H:%M}). Please choose another time."
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -540,19 +558,27 @@ def _price_snapshot(service, package, requested_hours) -> tuple[Decimal, int, in
 
     A package is a fixed offer, so it always costs its own price for its own
     duration. An hourly service multiplies by the hours the buyer asked for,
-    floored at the photographer's stated minimum.
+    floored at the photographer's stated minimum. Any other service always
+    takes its own full length: a 6-hour shoot occupies 6 hours.
     """
     from apps.catalog.models import PricingUnit
 
     if package is not None:
         return package.price, 1, package.duration_hours or service.duration_hours
 
-    hours = int(requested_hours or service.duration_hours or 1)
-    hours = max(hours, service.min_hours or 1)
-
     if service.pricing_unit == PricingUnit.PER_HOUR:
+        hours = int(requested_hours or service.duration_hours or 1)
+        hours = max(hours, service.min_hours or 1)
         return service.price, hours, hours
-    return service.price, 1, hours
+    return service.price, 1, service.duration_hours or 1
+
+
+def _time_text(booking: Booking) -> str:
+    """"at 14:00", or "for 2 days" when whole days are booked."""
+    days = package_days(booking.duration_hours)
+    if days:
+        return f"for {days} day{'' if days == 1 else 's'}"
+    return f"at {booking.start_time:%H:%M}"
 
 
 def _end_time(start_time, hours: int):

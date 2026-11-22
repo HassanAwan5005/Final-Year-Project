@@ -10,7 +10,7 @@ import { Input } from '../../../components/ui/Input';
 import { usePhotographerDetail } from '../../explore/hooks/usePhotographers';
 import { useAuthStore } from '../../../store/authStore';
 import { colors, radius, spacing, typography } from '../../../theme';
-import { formatPKR } from '../../../utils/format';
+import { formatDate, formatDuration, formatPKR, packageDays } from '../../../utils/format';
 import type { Service } from '../../../types/models';
 import {
   DatePicker,
@@ -49,11 +49,10 @@ export function CreateBookingScreen({
   const user = useAuthStore((s) => s.user);
 
   const photographer = usePhotographerDetail(photographerId);
-  const calendar = useAvailabilityCalendar(photographerId, 60);
 
   const [serviceId, setServiceId] = useState<number | null>(initialServiceId ?? null);
   const [date, setDate] = useState<string | null>(null);
-  const [time, setTime] = useState<string | null>(null);
+  const [pickedTime, setTime] = useState<string | null>(null);
   const [address, setAddress] = useState('');
   const [city, setCity] = useState(user?.city ?? '');
   const [guests, setGuests] = useState('');
@@ -67,13 +66,28 @@ export function CreateBookingScreen({
   );
 
   const duration = service?.duration_hours ?? 4;
-  const times = useAvailableTimes(photographerId, date, duration);
-  const createBooking = useCreateBooking();
-
+  // Depends on the shoot length: a date can fit a 3h shoot but not a 6h one.
+  const calendar = useAvailabilityCalendar(
+    photographer.data ? photographerId : null,
+    calendarDays(),
+    duration,
+  );
+  // A 1 or 2 day package books whole days, so there is no time to choose.
+  const wholeDays = packageDays(duration);
   const selectedDay =
     calendar.data?.days.find((d) => d.date === date) ?? null;
 
-  if (photographer.isLoading || calendar.isLoading) {
+  const times = useAvailableTimes(photographerId, wholeDays ? null : date, duration);
+  // Dropped automatically if someone else takes the slot before submitting.
+  const hourlyTime =
+    pickedTime && times.data?.available_start_times.includes(pickedTime)
+      ? pickedTime
+      : null;
+  const wholeDayTime = selectedDay?.is_available ? '00:00' : null;
+  const time = wholeDays ? wholeDayTime : hourlyTime;
+  const createBooking = useCreateBooking();
+
+  if (photographer.isLoading) {
     return <LoadingState label="Loading booking options…" />;
   }
   if (photographer.isError || !photographer.data) {
@@ -125,7 +139,7 @@ export function CreateBookingScreen({
           }
           // The calendar may have moved on — refetch so the strip is honest.
           calendar.refetch();
-          times.refetch();
+          if (!wholeDays) times.refetch();
         },
       },
     );
@@ -180,6 +194,7 @@ export function CreateBookingScreen({
         <Section title="When?" error={errors.date}>
           <DatePicker
             days={calendar.data?.days ?? []}
+            isLoading={calendar.isLoading}
             selectedDate={date}
             onSelectDate={(value) => {
               setDate(value);
@@ -187,16 +202,21 @@ export function CreateBookingScreen({
             }}
           />
           <UnavailableNotice day={selectedDay} />
+          {date && wholeDays && selectedDay?.is_available ? (
+            <Text style={styles.hint}>
+              {`Whole day booked: ${packageDates(date, wholeDays)}`}
+            </Text>
+          ) : null}
         </Section>
 
         {/* ─── Time ────────────────────────────────────────────────────── */}
-        {date ? (
+        {date && !wholeDays ? (
           <Section
             title={`Start time · ${duration}h shoot`}
             error={errors.time}
           >
             <TimePicker
-              times={times.data?.available_start_times ?? []}
+              times={times.data?.available_start_times}
               selected={time}
               onSelect={setTime}
               isLoading={times.isLoading}
@@ -281,6 +301,25 @@ export function CreateBookingScreen({
   );
 }
 
+/**
+ * Days from today to the end of the third month after this one.
+ *
+ * Counted from the UTC date because that is where the server's window starts.
+ */
+function calendarDays(now = new Date()): number {
+  const start = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const end = Date.UTC(now.getFullYear(), now.getMonth() + 4, 0);
+  return Math.round((end - start) / 86_400_000) + 1;
+}
+
+/** "20 Dec 2026", or "20 Dec 2026 and 21 Dec 2026" for a 2-day package. */
+function packageDates(date: string, days: number): string {
+  const first = Date.parse(date);
+  return Array.from({ length: days }, (_, i) =>
+    formatDate(new Date(first + i * 86_400_000).toISOString()),
+  ).join(' and ');
+}
+
 function Section({
   title,
   error,
@@ -323,7 +362,7 @@ function ServiceOption({
           {service.title}
         </Text>
         <Text style={styles.optionMeta}>
-          {service.duration_hours}h · {service.edited_photos_count} edited photos
+          {formatDuration(service.duration_hours)} · {service.edited_photos_count} edited photos
         </Text>
       </View>
       <Text style={styles.optionPrice}>{formatPKR(service.price)}</Text>

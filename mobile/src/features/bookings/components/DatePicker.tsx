@@ -47,7 +47,7 @@ export function DatePicker({
     return (
       <View style={styles.empty}>
         <Ionicons name="calendar-clear-outline" size={20} color={colors.dim} />
-        <Text style={styles.emptyText}>No dates available in the next two months.</Text>
+        <Text style={styles.emptyText}>No dates available in the next three months.</Text>
       </View>
     );
   }
@@ -88,11 +88,14 @@ function DateCell({
 }) {
   const date = new Date(`${day.date}T00:00:00`);
   const disabled = !day.is_available;
+  // Still opens, so the buyer sees the reason and the greyed-out hours.
+  const viewOnly = day.reason === 'NOT_ENOUGH_HOURS' || day.reason === 'FULLY_BOOKED';
+  const highlighted = selected && !disabled;
 
   return (
     <Pressable
       onPress={onPress}
-      disabled={disabled}
+      disabled={disabled && !viewOnly}
       accessibilityRole="button"
       accessibilityState={{ disabled, selected }}
       accessibilityLabel={
@@ -100,18 +103,23 @@ function DateCell({
           ? `${day.date} unavailable. ${day.message}`
           : `${day.date} available`
       }
-      style={[styles.cell, selected && styles.cellSelected, disabled && styles.cellOff]}
+      style={[
+        styles.cell,
+        highlighted && styles.cellSelected,
+        disabled && styles.cellOff,
+        selected && disabled && styles.cellOffSelected,
+      ]}
     >
-      <Text style={[styles.weekday, selected && styles.textSelected]}>
+      <Text style={[styles.weekday, highlighted && styles.textSelected]}>
         {date.toLocaleDateString('en-GB', { weekday: 'short' })}
       </Text>
-      <Text style={[styles.dayNumber, selected && styles.textSelected, disabled && styles.textOff]}>
+      <Text style={[styles.dayNumber, highlighted && styles.textSelected, disabled && styles.textOff]}>
         {date.getDate()}
       </Text>
       {disabled ? (
         <View style={styles.strike} />
       ) : (
-        <View style={[styles.availableDot, selected && styles.dotSelected]} />
+        <View style={[styles.availableDot, highlighted && styles.dotSelected]} />
       )}
     </Pressable>
   );
@@ -134,14 +142,24 @@ export function UnavailableNotice({ day }: { day: AvailabilityDay | null }) {
   );
 }
 
-/** Start-time chips for the chosen date, with taken slots already removed. */
+/** All 24 hours of the day, "00:00" to "23:00". */
+const DAY_HOURS = Array.from(
+  { length: 24 },
+  (_, hour) => `${String(hour).padStart(2, '0')}:00`,
+);
+
+/**
+ * Start-time chips for the chosen date. All 24 hours are shown; any hour not
+ * in `times` is taken, closed or leaves too little room for the shoot, and
+ * cannot be tapped.
+ */
 export function TimePicker({
   times,
   selected,
   onSelect,
   isLoading,
 }: {
-  times: string[];
+  times: string[] | undefined;
   selected: string | null;
   onSelect: (time: string) => void;
   isLoading?: boolean;
@@ -149,23 +167,33 @@ export function TimePicker({
   if (isLoading) {
     return <Text style={styles.hint}>Loading times…</Text>;
   }
-  if (!times.length) {
-    return <Text style={styles.hint}>No start times left on this date.</Text>;
+  if (!times) {
+    return <Text style={styles.hint}>Could not load times. Please try again.</Text>;
   }
+
+  const hours = [...new Set([...DAY_HOURS, ...times])].sort();
 
   return (
     <View style={styles.chips}>
-      {times.map((time) => {
+      {hours.map((time) => {
         const active = time === selected;
+        const disabled = !times.includes(time);
         return (
           <Pressable
             key={time}
             onPress={() => onSelect(time)}
+            disabled={disabled}
             accessibilityRole="button"
-            accessibilityState={{ selected: active }}
-            style={[styles.chip, active && styles.chipActive]}
+            accessibilityState={{ disabled, selected: active }}
+            style={[styles.chip, active && styles.chipActive, disabled && styles.chipOff]}
           >
-            <Text style={[styles.chipText, active && styles.chipTextActive]}>
+            <Text
+              style={[
+                styles.chipText,
+                active && styles.chipTextActive,
+                disabled && styles.chipTextOff,
+              ]}
+            >
               {time}
             </Text>
           </Pressable>
@@ -212,6 +240,7 @@ const styles = StyleSheet.create({
   },
   cellSelected: { backgroundColor: colors.gold, borderColor: colors.gold },
   cellOff: { backgroundColor: colors.surface, borderColor: colors.border, opacity: 0.55 },
+  cellOffSelected: { borderColor: colors.gold },
   weekday: { ...typography.tiny, color: colors.sub, textTransform: 'uppercase' },
   dayNumber: { ...typography.h3, color: colors.text },
   textSelected: { color: colors.bg },
@@ -250,8 +279,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
   },
   chipActive: { backgroundColor: colors.gold, borderColor: colors.gold },
+  chipOff: { backgroundColor: colors.surface, borderColor: colors.border, opacity: 0.55 },
   chipText: { ...typography.caption, color: colors.text, fontWeight: '600' },
   chipTextActive: { color: colors.bg },
+  chipTextOff: { color: colors.dim, textDecorationLine: 'line-through' },
   hint: { ...typography.caption, color: colors.sub },
   empty: {
     alignItems: 'center',

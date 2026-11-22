@@ -76,10 +76,11 @@ export function useUpcomingBookings() {
 export function useAvailabilityCalendar(
   photographerId: number | string | null,
   days = 60,
+  durationHours = 4,
 ) {
   return useQuery({
-    queryKey: qk.availability.calendar(photographerId ?? 0, days),
-    queryFn: () => availabilityApi.calendar(photographerId!, days),
+    queryKey: qk.availability.calendar(photographerId ?? 0, days, durationHours),
+    queryFn: () => availabilityApi.calendar(photographerId!, days, durationHours),
     enabled: photographerId !== null && photographerId !== undefined,
     staleTime: 60_000,
   });

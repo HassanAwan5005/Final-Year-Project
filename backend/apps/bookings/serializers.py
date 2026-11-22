@@ -61,8 +61,9 @@ class BookingCreateSerializer(serializers.Serializer):
     event_date = serializers.DateField()
     start_time = serializers.TimeField()
     duration_hours = serializers.IntegerField(
-        required=False, min_value=1, max_value=24,
-        help_text="Ignored when a package is chosen — packages have a fixed length.",
+        required=False, min_value=1, max_value=48,
+        help_text="Hourly services only — fixed-price services and packages have "
+                  "a fixed length.",
     )
 
     location_address = serializers.CharField(max_length=300)
@@ -294,7 +295,7 @@ class BookingDetailSerializer(BookingListSerializer):
 
         # Completing before the shoot has happened is refused by the service;
         # offering the button anyway would be a guaranteed error.
-        if "complete" in actions and obj.event_date > timezone.localdate():
+        if "complete" in actions and obj.last_date > timezone.localdate():
             actions.remove("complete")
         if obj.is_reviewable and role == "BUYER":
             actions.append("review")

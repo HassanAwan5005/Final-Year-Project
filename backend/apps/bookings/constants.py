@@ -73,6 +73,14 @@ BLOCKING_STATUSES = [BookingStatus.PENDING, BookingStatus.ACCEPTED]
 REVIEWABLE_STATUSES = [BookingStatus.COMPLETED]
 
 
+def package_days(hours: int | None) -> int:
+    """
+    1 for a 1-day package (24h), 2 for a 2-day package (48h), 0 for a shoot
+    measured in hours. A day package takes whole dates, so it has no start time.
+    """
+    return hours // 24 if hours and hours % 24 == 0 else 0
+
+
 def can_transition(current: str, target: str, actor_role: str = "ADMIN") -> bool:
     """Single source of truth for transition legality."""
     if target not in ALLOWED_TRANSITIONS.get(current, set()):

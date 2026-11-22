@@ -108,6 +108,15 @@ class OwnServiceSerializer(ServiceSerializer):
         return obj.booking_count == 0
 
 
+def _bookable_length(hours: int) -> int:
+    """Up to 24 hours, or exactly 48 for a 2-day package. Nothing else can be booked."""
+    if hours > 24 and hours != 48:
+        raise serializers.ValidationError(
+            "Use up to 24 hours, or 48 hours for a 2-day package."
+        )
+    return hours
+
+
 class ServiceWriteSerializer(serializers.ModelSerializer):
     """
     What a photographer may set on a service.
@@ -139,6 +148,9 @@ class ServiceWriteSerializer(serializers.ModelSerializer):
                 "That price looks like a typo. Contact support for enterprise packages."
             )
         return value
+
+    def validate_duration_hours(self, value):
+        return _bookable_length(value)
 
     def validate_title(self, value):
         value = value.strip()
@@ -179,6 +191,9 @@ class ServicePackageWriteSerializer(serializers.ModelSerializer):
         if value <= 0:
             raise serializers.ValidationError("Set a price above zero.")
         return value
+
+    def validate_duration_hours(self, value):
+        return _bookable_length(value)
 
     def validate_features(self, value):
         if not isinstance(value, list):

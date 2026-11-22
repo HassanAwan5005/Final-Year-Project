@@ -119,7 +119,8 @@ def test_blocking_a_range(photographer_client, photographer):
 def test_a_blackout_closes_the_dates_for_buyers(photographer_client, photographer):
     from apps.availability.selectors import day_availability
 
-    start = working_date(20)
+    middle = working_date(21)
+    start = middle - timedelta(days=1)
     photographer_client.post(
         f"{URL}blackouts/add/",
         {
@@ -130,7 +131,7 @@ def test_a_blackout_closes_the_dates_for_buyers(photographer_client, photographe
         format="json",
     )
 
-    day = day_availability(photographer, start + timedelta(days=1))
+    day = day_availability(photographer, middle)
     assert day.is_available is False
     assert day.reason == "BLACKOUT"
     assert day.message == "Shooting abroad"

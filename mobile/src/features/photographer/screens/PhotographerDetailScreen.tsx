@@ -16,7 +16,7 @@ import { Avatar } from '../../../components/ui/Avatar';
 import { Button } from '../../../components/ui/Button';
 import { Stars } from '../../../components/ui/Stars';
 import type { PendingBookingReview, Service } from '../../../types/models';
-import { formatPKR, formatRating, timeAgo } from '../../../utils/format';
+import { formatDuration, formatPKR, formatRating, timeAgo } from '../../../utils/format';
 import { colors, radius, spacing, typography } from '../../../theme';
 import { usePhotographerDetail } from '../../explore/hooks/usePhotographers';
 import { usePendingReviews } from '../../reviews/hooks/useReviews';
@@ -382,7 +382,7 @@ function ServiceCard({ service, onBook }: { service: Service; onBook: () => void
       </Text>
 
       <View style={styles.serviceMeta}>
-        <Pill icon="time-outline" label={`${service.duration_hours}h`} />
+        <Pill icon="time-outline" label={formatDuration(service.duration_hours)} />
         <Pill icon="image-outline" label={`${service.edited_photos_count} photos`} />
         <Pill icon="calendar-outline" label={`${service.delivery_days}d delivery`} />
       </View>

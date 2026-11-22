@@ -436,13 +436,15 @@ class Command(BaseCommand):
         return out
 
     def _seed_services(self):
-        """Give every photographer three tiers around their base price."""
+        """Give every photographer five tiers around their base price."""
         from apps.catalog.models import Service
 
         tiers = [
             ("Essential {cat} Package", 0.7, 3, 40),
             ("Signature {cat} Package", 1.0, 6, 90),
             ("Premium {cat} Package", 1.6, 10, 180),
+            ("1 Day {cat} Package", 2.5, 24, 300),
+            ("2 Day {cat} Package", 4.5, 48, 550),
         ]
         created = 0
         for profile in self.photographers.values():
@@ -450,12 +452,13 @@ class Command(BaseCommand):
                 continue
             category = profile.categories.first()
             for order, (title, mult, hours, photos) in enumerate(tiers):
+                length = {24: "1 full day", 48: "2 full days"}.get(hours, f"{hours} hours")
                 Service.objects.create(
                     photographer=profile,
                     category=category,
                     title=title.format(cat=category.name),
                     description=(
-                        f"{hours} hours of {category.name.lower()} coverage with "
+                        f"{length} of {category.name.lower()} coverage with "
                         f"{photos} professionally edited photographs, delivered "
                         f"through a private online gallery."
                     ),
@@ -464,11 +467,11 @@ class Command(BaseCommand):
                     edited_photos_count=photos,
                     delivery_days=14 if order < 2 else 21,
                     includes=[
-                        f"{hours} hours coverage",
+                        f"{length} coverage",
                         f"{photos} edited photos",
                         "Private online gallery",
                         "Print release",
-                    ] + (["Second photographer", "Same-day previews"] if order == 2 else []),
+                    ] + (["Second photographer", "Same-day previews"] if order >= 2 else []),
                     display_order=order,
                     is_active=True,
                 )
@@ -606,7 +609,7 @@ class Command(BaseCommand):
             profile = self.photographers.get(int(row["Photographer_ID"]))
             if not buyer or not profile:
                 continue
-            service = profile.services.order_by("?").first()
+            service = profile.services.filter(duration_hours__lt=24).order_by("?").first()
             if not service:
                 continue
 
@@ -777,7 +780,7 @@ class Command(BaseCommand):
             if target <= 0:
                 continue
 
-            services = list(profile.services.all())
+            services = list(profile.services.filter(duration_hours__lt=24))
             if not services:
                 continue
 

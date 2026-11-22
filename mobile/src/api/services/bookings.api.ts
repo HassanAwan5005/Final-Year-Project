@@ -113,10 +113,12 @@ export const bookingsApi = {
 };
 
 export const availabilityApi = {
-  /** Which dates are bookable in the next `days`, and why not, if not. */
-  calendar(photographerId: number | string, days = 60) {
+  /** Which dates can fit a shoot of this length, and why not, if not. */
+  calendar(photographerId: number | string, days = 60, durationHours = 4) {
     return unwrap<AvailabilityCalendar>(
-      api.get(ENDPOINTS.availability.calendar(photographerId), { params: { days } }),
+      api.get(ENDPOINTS.availability.calendar(photographerId), {
+        params: { days, duration_hours: durationHours },
+      }),
     );
   },
 

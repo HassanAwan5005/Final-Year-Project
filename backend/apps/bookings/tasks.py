@@ -75,7 +75,7 @@ def auto_complete_bookings():
     for booking in due.iterator():
         with transaction.atomic():
             locked = Booking.objects.select_for_update().get(pk=booking.pk)
-            if locked.status != BookingStatus.ACCEPTED:
+            if locked.status != BookingStatus.ACCEPTED or locked.last_date > cutoff:
                 continue
             locked.status = BookingStatus.COMPLETED
             locked.completed_at = timezone.now()
@@ -145,6 +145,7 @@ def _notify_expiry(booking_id: int):
 
 @shared_task
 def _notify_reminder(booking_id: int):
+    from apps.bookings.services import _time_text
     from apps.notifications.services import notify
 
     booking = Booking.objects.select_related("buyer", "photographer__user").get(
@@ -159,8 +160,8 @@ def _notify_reminder(booking_id: int):
             "BOOKING_REMINDER",
             title="Shoot tomorrow",
             body=(
-                f"Your shoot with {other} is tomorrow at "
-                f"{booking.start_time:%H:%M} — {booking.location_address}"
+                f"Your shoot with {other} is tomorrow "
+                f"{_time_text(booking)} — {booking.location_address}"
             ),
             action_screen="BookingDetail",
             action_id=str(booking.pk),

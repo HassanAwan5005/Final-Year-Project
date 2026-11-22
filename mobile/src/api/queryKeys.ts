@@ -109,8 +109,8 @@ export const qk = {
 
   availability: {
     all: ['availability'] as const,
-    calendar: (photographerId: number | string, days: number) =>
-      ['availability', 'calendar', String(photographerId), days] as const,
+    calendar: (photographerId: number | string, days: number, duration: number) =>
+      ['availability', 'calendar', String(photographerId), days, duration] as const,
     day: (photographerId: number | string, date: string, duration: number) =>
       ['availability', 'day', String(photographerId), date, duration] as const,
   },

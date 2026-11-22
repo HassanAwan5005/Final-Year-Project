@@ -26,20 +26,15 @@ PASSWORD = "TestPass123!"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # DATES
-# The seeded calendar has Sunday off, so a test that happens to pick a Sunday
-# would fail for a reason that has nothing to do with what it is testing.
 # ═══════════════════════════════════════════════════════════════════════════
 def working_date(days_ahead: int = 7, *, from_date: date | None = None) -> date:
-    """A date at least `days_ahead` away that is not a Sunday."""
-    candidate = (from_date or date.today()) + timedelta(days=days_ahead)
-    while candidate.weekday() == 6:  # Sunday
-        candidate += timedelta(days=1)
-    return candidate
+    """The date `days_ahead` away. Every weekday is open by default."""
+    return (from_date or date.today()) + timedelta(days=days_ahead)
 
 
 @pytest.fixture
 def event_date() -> date:
-    """Comfortably past BOOKING_MIN_LEAD_HOURS and not a Sunday."""
+    """Comfortably past BOOKING_MIN_LEAD_HOURS."""
     return working_date(7)
 
 

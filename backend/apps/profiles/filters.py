@@ -119,16 +119,15 @@ class PhotographerFilterSet(django_filters.FilterSet):
 
         Three reasons someone is unavailable, all checked:
           · their weekly rule marks that weekday as off
-          · a blackout range covers the date
-          · they already have a PENDING or ACCEPTED booking that day
+          · a full-day blackout covers the date
+          · bookings and part-day blocks leave no free hour that day
 
         Implemented as exclusions rather than an inclusion join, because a
         photographer with no explicit rules should default to available — the
         opposite would hide every newly-registered account.
         """
         from apps.availability.models import AvailabilityRule, BlackoutDate
-        from apps.bookings.constants import BLOCKING_STATUSES
-        from apps.bookings.models import Booking
+        from apps.availability.selectors import fully_booked_photographer_ids
 
         weekday = value.weekday()
 
@@ -137,15 +136,11 @@ class PhotographerFilterSet(django_filters.FilterSet):
         ).values("photographer_id")
 
         blacked_out = BlackoutDate.objects.filter(
-            start_date__lte=value, end_date__gte=value
-        ).values("photographer_id")
-
-        already_booked = Booking.objects.filter(
-            event_date=value, status__in=BLOCKING_STATUSES
+            start_date__lte=value, end_date__gte=value, is_full_day=True
         ).values("photographer_id")
 
         return queryset.exclude(
             Q(pk__in=unavailable_weekday)
             | Q(pk__in=blacked_out)
-            | Q(pk__in=already_booked)
+            | Q(pk__in=fully_booked_photographer_ids(value))
         )

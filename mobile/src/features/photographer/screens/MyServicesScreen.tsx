@@ -20,7 +20,7 @@ import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { useCategories } from '../../explore/hooks/usePhotographers';
 import { colors, radius, spacing, typography } from '../../../theme';
-import { formatPKR } from '../../../utils/format';
+import { formatDuration, formatPKR } from '../../../utils/format';
 import type { OwnService } from '../../../types/models';
 import {
   useArchiveService,
@@ -89,6 +89,11 @@ export function MyServicesScreen({ onBack }: { onBack: () => void }) {
   const submit = () => {
     if (!form.category) {
       Alert.alert('Category needed', 'Pick the event type this service is for.');
+      return;
+    }
+    const hours = Number(form.duration_hours);
+    if (hours > 24 && hours !== 48) {
+      Alert.alert('Check the hours', 'Use up to 24 hours, or 48 hours for a 2-day package.');
       return;
     }
     const payload = {
@@ -285,7 +290,7 @@ export function MyServicesScreen({ onBack }: { onBack: () => void }) {
             <View style={styles.row}>
               <View style={styles.rowItem}>
                 <Input
-                  label="Hours"
+                  label="Hours (24 = 1 day, 48 = 2 days)"
                   value={form.duration_hours}
                   onChangeText={(v) =>
                     setForm({ ...form, duration_hours: v.replace(/[^0-9]/g, '') })
@@ -386,7 +391,7 @@ function ServiceRow({
             ) : null}
           </View>
           <Text style={styles.meta}>
-            {service.category?.name} · {service.duration_hours}h ·{' '}
+            {service.category?.name} · {formatDuration(service.duration_hours)} ·{' '}
             {service.edited_photos_count} photos
           </Text>
           <Text style={styles.bookings}>

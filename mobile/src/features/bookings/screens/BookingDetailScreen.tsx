@@ -18,7 +18,7 @@ import { Avatar } from '../../../components/ui/Avatar';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { colors, radius, spacing, typography } from '../../../theme';
-import { formatDate, formatPKR, timeAgo } from '../../../utils/format';
+import { formatDate, formatDuration, formatPKR, packageDays, timeAgo } from '../../../utils/format';
 import type { BookingAction, BookingDetail } from '../../../types/models';
 import { StatusPill } from '../components/StatusPill';
 import {
@@ -200,10 +200,14 @@ export function BookingDetailScreen({
           />
           <Row
             icon="time-outline"
-            label="Time"
-            value={`${booking.start_time.slice(0, 5)}${
-              booking.end_time ? ` – ${booking.end_time.slice(0, 5)}` : ''
-            } · ${booking.duration_hours}h`}
+            label={packageDays(booking.duration_hours) ? 'Duration' : 'Time'}
+            value={
+              packageDays(booking.duration_hours)
+                ? formatDuration(booking.duration_hours)
+                : `${booking.start_time.slice(0, 5)}${
+                    booking.end_time ? ` – ${booking.end_time.slice(0, 5)}` : ''
+                  } · ${booking.duration_hours}h`
+            }
           />
           <Row
             icon="location-outline"

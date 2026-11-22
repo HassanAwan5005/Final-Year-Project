@@ -14,7 +14,7 @@ import { ApiError } from '../../../api/client';
 import { ErrorState, LoadingState } from '../../../components/feedback/States';
 import { useAuthStore } from '../../../store/authStore';
 import { colors, radius, spacing, typography } from '../../../theme';
-import { formatDate, formatPKR, formatPKRShort } from '../../../utils/format';
+import { formatDate, formatPKR, formatPKRShort, formatStart } from '../../../utils/format';
 import type {
   CategorySplit,
   Funnel,
@@ -239,7 +239,7 @@ export function DashboardScreen({
                 <View style={styles.upcomingBody}>
                   <Text style={styles.upcomingName}>{booking.buyer.name}</Text>
                   <Text style={styles.upcomingMeta} numberOfLines={1}>
-                    {booking.start_time.slice(0, 5)} · {booking.location_city}
+                    {formatStart(booking)} · {booking.location_city}
                   </Text>
                 </View>
                 <Text style={styles.upcomingPrice}>
