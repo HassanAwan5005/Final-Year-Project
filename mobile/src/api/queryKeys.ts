@@ -21,7 +21,6 @@ export const qk = {
     all: ['photographers'] as const,
     list: (filters: PhotographerFilters) => ['photographers', 'list', filters] as const,
     detail: (id: number | string) => ['photographers', 'detail', String(id)] as const,
-    featured: ['photographers', 'featured'] as const,
     trending: (city?: string) => ['photographers', 'trending', city ?? 'all'] as const,
     filterOptions: ['photographers', 'filter-options'] as const,
   },
