@@ -19,6 +19,7 @@ import { WriteReviewScreen } from '../features/reviews/screens/WriteReviewScreen
 import { PhotographerDetailScreen } from '../features/photographer/screens/PhotographerDetailScreen';
 import { EditProfileScreen } from '../features/profile/screens/EditProfileScreen';
 import { ProfileScreen } from '../features/profile/screens/ProfileScreen';
+import { VerifyEmailScreen } from '../features/auth/screens/VerifyEmailScreen';
 import { WishlistScreen } from '../features/profile/screens/WishlistScreen';
 import { CartScreen } from '../features/shop/screens/CartScreen';
 import { ProductDetailScreen } from '../features/shop/screens/ProductDetailScreen';
@@ -61,6 +62,7 @@ export type BuyerStackParams = {
   Purchases: undefined;
   Wishlist: undefined;
   EditProfile: undefined;
+  VerifyEmail: undefined;
   // ─── Module 9 ───────────────────────────────────────────────────────────
   MyReviews: undefined;
   PhotographerReviews: { photographerId: number; name?: string };
@@ -205,6 +207,7 @@ function BuyerTabs({ navigation }: any) {
               navigation.navigate('NotificationSettings')
             }
             onEditProfile={() => navigation.navigate('EditProfile')}
+            onVerifyEmail={() => navigation.navigate('VerifyEmail')}
           />
         )}
       </Tab.Screen>
@@ -521,6 +524,16 @@ export function BuyerNavigator() {
 
       <Stack.Screen name="EditProfile">
         {({ navigation }) => <EditProfileScreen onBack={() => navigation.goBack()} />}
+      </Stack.Screen>
+
+      <Stack.Screen name="VerifyEmail">
+        {({ navigation }) => (
+          <VerifyEmailScreen
+            codeAlreadySent={false}
+            closeLabel="Back to profile"
+            onClose={() => navigation.goBack()}
+          />
+        )}
       </Stack.Screen>
     </Stack.Navigator>
   );

@@ -27,12 +27,15 @@ interface AuthState {
   /** True until the initial "am I already signed in?" check completes. */
   isBootstrapping: boolean;
   isAuthenticated: boolean;
+  /** True from sign-up until the code is entered or the user chooses "later". */
+  isVerifyPending: boolean;
 
   bootstrap: () => Promise<void>;
   login: (email: string, password: string) => Promise<User>;
   register: (payload: RegisterPayload) => Promise<User>;
   logout: (allDevices?: boolean) => Promise<void>;
   setUser: (user: User) => void;
+  finishVerify: () => void;
   clearSession: () => void;
 }
 
@@ -50,6 +53,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   isBootstrapping: true,
   isAuthenticated: false,
+  isVerifyPending: false,
 
   /**
    * Runs once at app start.
@@ -92,7 +96,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }),
     );
     await tokenStorage.set(result.tokens.access, result.tokens.refresh);
-    set({ user: result.user, isAuthenticated: true });
+    set({ user: result.user, isAuthenticated: true, isVerifyPending: true });
     return result.user;
   },
 
@@ -107,14 +111,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // The local session is cleared regardless.
     } finally {
       await tokenStorage.clear();
-      set({ user: null, isAuthenticated: false });
+      set({ user: null, isAuthenticated: false, isVerifyPending: false });
     }
   },
 
   setUser: (user) => set({ user }),
+  finishVerify: () => set({ isVerifyPending: false }),
 
   /** Called by the axios interceptor when a refresh fails. */
-  clearSession: () => set({ user: null, isAuthenticated: false }),
+  clearSession: () =>
+    set({ user: null, isAuthenticated: false, isVerifyPending: false }),
 }));
 
 // ─── Selectors (subscribe to one slice, avoid needless re-renders) ──────────

@@ -212,12 +212,7 @@ class ResendOTPView(GenericAPIView):
         if purpose == OTPPurpose.EMAIL_VERIFICATION and request.user.is_email_verified:
             raise BusinessRuleViolation("Your email is already verified.")
 
-        code = services.issue_otp(request.user, purpose)
-        from apps.accounts.tasks import send_verification_email
-
-        send_verification_email.delay(
-            request.user.id, request.user.email, request.user.full_name, code
-        )
+        services.resend_otp(request.user, purpose)
         return Response({"message": "A new code has been sent.", "data": None})
 
 

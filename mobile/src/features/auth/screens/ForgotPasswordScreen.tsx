@@ -18,9 +18,10 @@ import {
 
 interface Props {
   onGoLogin: () => void;
+  onResetDone: (email: string) => void;
 }
 
-export function ForgotPasswordScreen({ onGoLogin }: Props) {
+export function ForgotPasswordScreen({ onGoLogin, onResetDone }: Props) {
   const [stage, setStage] = useState<'request' | 'confirm' | 'done'>('request');
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -93,10 +94,10 @@ export function ForgotPasswordScreen({ onGoLogin }: Props) {
           <Text style={styles.bigIcon}>✓</Text>
           <Text style={styles.title}>Password updated</Text>
           <Text style={styles.subtitle}>
-            You can now sign in with your new password. All other devices have
-            been signed out.
+            The password for {email} was changed. Sign in with that email and
+            your new password. All other devices have been signed out.
           </Text>
-          <Button label="Back to sign in" onPress={onGoLogin} size="lg" />
+          <Button label="Back to sign in" onPress={() => onResetDone(email)} size="lg" />
         </View>
       </Screen>
     );
