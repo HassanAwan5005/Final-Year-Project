@@ -359,7 +359,9 @@ function ChatThread({
             <View style={styles.emptyThread}>
               <Text style={styles.emptyTitle}>No messages yet</Text>
               <Text style={styles.emptyDetail}>
-                Ask about a date, a location or what is included.
+                {conversation.data?.product
+                  ? 'Ask about the condition, the price or where to collect it.'
+                  : 'Ask about a date, a location or what is included.'}
               </Text>
             </View>
           }
@@ -607,7 +609,10 @@ const styles = StyleSheet.create({
   emptyThread: {
     alignItems: 'center',
     paddingVertical: spacing.huge,
-    transform: [{ scaleY: -1 }],
+    // No transform here. The inverted list already flips its empty component
+    // back the right way on each platform (scale -1 on Android, scaleY -1 on
+    // iOS). A transform here REPLACES that correction, which left the text
+    // mirrored left-to-right on Android.
   },
   emptyTitle: { ...typography.h3, color: colors.text },
   emptyDetail: {

@@ -69,12 +69,19 @@ def get_or_create_conversation(
 
     _assert_may_initiate(initiator, other_user, product=product)
 
-    existing = (
+    # One thread per pair for shoots and bookings, and one more per shop ad,
+    # like OLX. Sharing a single thread made an ad chat land inside a shoot
+    # chat (with that shoot's booking bar and package smart replies), and a
+    # second ad from the same seller relabelled the first ad's messages.
+    pair = (
         Conversation.objects.filter(participant_links__user=initiator)
         .filter(participant_links__user=other_user)
-        .order_by("pk")
-        .first()
     )
+    if product is not None:
+        pair = pair.filter(product=product)
+    else:
+        pair = pair.filter(product__isnull=True)
+    existing = pair.order_by("pk").first()
     if existing is not None:
         # Attach the booking if the thread predates it — buyers message before
         # booking, and the chat screen shows the booking status inline once
@@ -82,10 +89,6 @@ def get_or_create_conversation(
         if booking is not None and existing.booking_id is None:
             Conversation.objects.filter(pk=existing.pk).update(booking=booking)
             existing.booking = booking
-        # The thread is about whichever product was asked about last.
-        if product is not None and existing.product_id != product.pk:
-            Conversation.objects.filter(pk=existing.pk).update(product=product)
-            existing.product = product
         # Re-opening a thread you had left rejoins you rather than starting over.
         ConversationParticipant.objects.filter(
             conversation=existing, user=initiator, left_at__isnull=False

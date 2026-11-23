@@ -156,20 +156,45 @@ def test_anyone_may_message_the_seller_of_a_live_product(
     assert reply.status_code == 201
 
 
-def test_messaging_a_seller_twice_reuses_the_thread_and_follows_the_product(
+def test_each_ad_has_its_own_thread_with_the_seller(
     buyer, photographer, product, second_product
 ):
+    """Like OLX: a second ad from the same seller must not relabel the first ad's chat."""
     first, created = services.get_or_create_conversation(
         buyer, photographer.user, product=product
     )
-    again, created_again = services.get_or_create_conversation(
+    second, created_second = services.get_or_create_conversation(
         buyer, photographer.user, product=second_product
     )
+    again, created_again = services.get_or_create_conversation(
+        buyer, photographer.user, product=product
+    )
 
-    assert (created, created_again) == (True, False)
-    assert first.pk == again.pk
-    again.refresh_from_db()
-    assert again.product_id == second_product.pk
+    assert (created, created_second, created_again) == (True, True, False)
+    assert first.pk != second.pk
+    assert again.pk == first.pk
+    first.refresh_from_db()
+    assert first.product_id == product.pk
+
+
+def test_an_ad_chat_is_separate_from_the_shoot_chat(buyer, photographer, product):
+    """
+    Asking a photographer about their ad must not land in the shoot thread,
+    which carries the booking bar and package smart replies.
+    """
+    shoot, _ = services.get_or_create_conversation(buyer, photographer.user)
+    ad, created = services.get_or_create_conversation(
+        buyer, photographer.user, product=product
+    )
+    shoot_again, created_again = services.get_or_create_conversation(
+        buyer, photographer.user
+    )
+
+    assert created is True
+    assert ad.pk != shoot.pk
+    assert (shoot_again.pk, created_again) == (shoot.pk, False)
+    shoot.refresh_from_db()
+    assert shoot.product_id is None
 
 
 def test_a_product_is_not_a_pass_to_message_anyone_else(

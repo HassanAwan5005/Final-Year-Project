@@ -15,7 +15,7 @@ import { ApiError } from '../../../api/client';
 import { EmptyState, ErrorState, LoadingState } from '../../../components/feedback/States';
 import { Avatar } from '../../../components/ui/Avatar';
 import { colors, radius, spacing, typography } from '../../../theme';
-import { timeAgo } from '../../../utils/format';
+import { formatPKR, timeAgo } from '../../../utils/format';
 import type { Conversation } from '../../../types/models';
 import {
   useConversations,
@@ -211,6 +211,16 @@ function ConversationRow({
             <Ionicons name="calendar-outline" size={11} color={colors.sub} />
             <Text style={styles.bookingText} numberOfLines={1}>
               {row.booking.service_title} · {row.booking.status.toLowerCase()}
+            </Text>
+          </View>
+        ) : null}
+
+        {row.product ? (
+          <View style={styles.bookingChip}>
+            <Ionicons name="pricetag-outline" size={11} color={colors.sub} />
+            <Text style={styles.bookingText} numberOfLines={1}>
+              {row.product.title} ·{' '}
+              {row.product.is_available ? formatPKR(row.product.price) : 'not available'}
             </Text>
           </View>
         ) : null}
