@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -20,6 +20,7 @@ import { formatDuration, formatPKR, formatRating, timeAgo } from '../../../utils
 import { colors, radius, spacing, typography } from '../../../theme';
 import { usePhotographerDetail } from '../../explore/hooks/usePhotographers';
 import { usePendingReviews } from '../../reviews/hooks/useReviews';
+import { PhotoViewer } from '../../shop/components/PhotoViewer';
 
 interface Props {
   photographerId: number;
@@ -44,6 +45,8 @@ export function PhotographerDetailScreen({
   const { data, isLoading, isError, error, refetch } =
     usePhotographerDetail(photographerId);
   const pendingReviews = usePendingReviews(Boolean(onWriteReview));
+  /** Index of the portfolio photo open full screen, or null when closed. */
+  const [viewing, setViewing] = useState<number | null>(null);
   // A completed booking with this photographer the buyer has not reviewed yet.
   const reviewable = pendingReviews.data?.bookings.find(
     (b) => b.photographer_id === photographerId,
@@ -180,14 +183,20 @@ export function PhotographerDetailScreen({
         {data.portfolio && data.portfolio.length > 0 ? (
           <Section title="Portfolio">
             <View style={styles.grid}>
-              {data.portfolio.slice(0, 9).map((image) => (
-                <Image
+              {data.portfolio.slice(0, 9).map((image, index) => (
+                <Pressable
                   key={image.id}
-                  source={{ uri: image.thumbnail_url ?? image.image_url ?? '' }}
-                  style={[styles.thumb, { width: thumbSize, height: thumbSize }]}
-                  contentFit="cover"
-                  transition={200}
-                />
+                  onPress={() => setViewing(index)}
+                  accessibilityRole="imagebutton"
+                  accessibilityLabel={image.caption || 'Portfolio photo'}
+                >
+                  <Image
+                    source={{ uri: image.thumbnail_url ?? image.image_url ?? '' }}
+                    style={[styles.thumb, { width: thumbSize, height: thumbSize }]}
+                    contentFit="cover"
+                    transition={200}
+                  />
+                </Pressable>
               ))}
             </View>
           </Section>
@@ -324,6 +333,16 @@ export function PhotographerDetailScreen({
           />
         </View>
       </View>
+
+      {viewing !== null && data.portfolio?.length ? (
+        <PhotoViewer
+          uris={data.portfolio
+            .slice(0, 9)
+            .map((image) => image.image_url ?? image.thumbnail_url ?? '')}
+          initialIndex={viewing}
+          onClose={() => setViewing(null)}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }

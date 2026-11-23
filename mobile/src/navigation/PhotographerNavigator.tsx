@@ -7,7 +7,7 @@ import { DashboardScreen } from '../features/dashboard/screens/DashboardScreen';
 import { BookingDetailScreen } from '../features/bookings/screens/BookingDetailScreen';
 import { BookingsScreen } from '../features/bookings/screens/BookingsScreen';
 import { RequestsScreen } from '../features/bookings/screens/RequestsScreen';
-import { PortfolioScreen } from '../features/portfolio/screens/PortfolioScreen';
+import { MyPortfolioScreen } from '../features/photographer/screens/MyPortfolioScreen';
 import { ProfileScreen } from '../features/profile/screens/ProfileScreen';
 import { VerifyEmailScreen } from '../features/auth/screens/VerifyEmailScreen';
 import { WishlistScreen } from '../features/profile/screens/WishlistScreen';
@@ -125,7 +125,10 @@ function PhotographerTabs({ navigation }: any) {
       </Tab.Screen>
 
       <Tab.Screen name="Portfolio">
-        {() => <PortfolioScreen />}
+        {/* The real portfolio manager: grid, upload, delete, feature and a
+            full-screen viewer. It had been replaced by a read-only album list,
+            so photographers could not see, add or delete their images. */}
+        {() => <MyPortfolioScreen />}
       </Tab.Screen>
 
       <Tab.Screen name="Shop">

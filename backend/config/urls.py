@@ -55,4 +55,10 @@ urlpatterns = [
 ]
 
 if settings.DEBUG:
+    # Portfolio images are stored as WebP. Python reads file types from the OS,
+    # and Windows does not list .webp, so Django sent them as
+    # application/octet-stream and the app could fail to show them.
+    import mimetypes
+
+    mimetypes.add_type("image/webp", ".webp")
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
