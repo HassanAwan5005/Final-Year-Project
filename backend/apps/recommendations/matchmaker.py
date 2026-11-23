@@ -15,7 +15,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from django.db.models import Prefetch
+from django.db.models import Exists, OuterRef, Prefetch
 
 logger = logging.getLogger("snapsphere")
 
@@ -49,41 +49,103 @@ class ShootConstraints:
 PAKISTANI_CITIES = [
     "Lahore", "Karachi", "Islamabad", "Rawalpindi", "Faisalabad",
     "Multan", "Peshawar", "Sialkot", "Gujranwala", "Quetta", "Hyderabad",
+    # Recognised even with no photographer there yet, so the buyer is told
+    # "no photographers in Gujrat" instead of silently getting all of Pakistan.
+    "Gujrat", "Bahawalpur", "Sargodha", "Sukkur", "Larkana", "Sheikhupura",
+    "Rahim Yar Khan", "Jhang", "Dera Ghazi Khan", "Sahiwal", "Wah Cantt",
+    "Mardan", "Kasur", "Okara", "Mingora", "Nawabshah", "Chiniot", "Kamoke",
+    "Sadiqabad", "Burewala", "Jacobabad", "Muzaffargarh", "Abbottabad",
+    "Mirpur", "Muzaffarabad", "Gilgit", "Skardu", "Murree", "Jhelum",
+    "Mandi Bahauddin", "Khanewal", "Hafizabad", "Kohat", "Attock", "Gwadar",
+    "Mansehra", "Swat", "Chakwal", "Vehari", "Mianwali", "Taxila",
 ]
 
+# Words a buyer uses → (category slug, event label). The slugs are the five
+# photographer categories: wedding, corporate, fashion, birthday, graduation.
+# Checked in this order, so "office party" is corporate and "wedding party" is
+# a wedding. Plurals match too ("companies", "walimas").
 EVENT_CATEGORY_MAP = {
-    # Wedding sub-events
+    # Wedding and its events
     "mehndi": ("wedding", "Mehndi"),
+    "mehendi": ("wedding", "Mehndi"),
+    "mehandi": ("wedding", "Mehndi"),
     "mayun": ("wedding", "Mayun"),
+    "mayon": ("wedding", "Mayun"),
+    "mayoon": ("wedding", "Mayun"),
     "dholki": ("wedding", "Dholki"),
+    "dholak": ("wedding", "Dholki"),
     "baraat": ("wedding", "Baraat"),
     "barat": ("wedding", "Baraat"),
+    "rukhsati": ("wedding", "Rukhsati"),
     "walima": ("wedding", "Walima"),
     "valima": ("wedding", "Walima"),
     "nikkah": ("wedding", "Nikkah"),
     "nikah": ("wedding", "Nikkah"),
     "wedding": ("wedding", "Wedding"),
     "shaadi": ("wedding", "Wedding"),
+    "shadi": ("wedding", "Wedding"),
+    "marriage": ("wedding", "Wedding"),
     "reception": ("wedding", "Reception"),
     "engagement": ("wedding", "Engagement"),
+    "mangni": ("wedding", "Engagement"),
+    "sangeet": ("wedding", "Sangeet"),
     "bridal shower": ("wedding", "Bridal Shower"),
+    "bridal": ("wedding", "Bridal"),
+    "bride": ("wedding", "Wedding"),
+    "groom": ("wedding", "Wedding"),
+    "dulha": ("wedding", "Wedding"),
+    "dulhan": ("wedding", "Wedding"),
     # Corporate
     "corporate": ("corporate", "Corporate"),
+    "company": ("corporate", "Corporate"),
+    "companies": ("corporate", "Corporate"),
+    "organization": ("corporate", "Corporate"),
+    "organisation": ("corporate", "Corporate"),
+    "office": ("corporate", "Office Event"),
+    "ceo": ("corporate", "Corporate"),
+    "executive": ("corporate", "Corporate"),
+    "business": ("corporate", "Corporate"),
+    "firm": ("corporate", "Corporate"),
+    "startup": ("corporate", "Corporate"),
+    "employee": ("corporate", "Corporate"),
+    "staff": ("corporate", "Corporate"),
     "conference": ("corporate", "Conference"),
     "seminar": ("corporate", "Seminar"),
-    "office": ("corporate", "Office Event"),
+    "workshop": ("corporate", "Workshop"),
+    "product launch": ("corporate", "Product Launch"),
+    "launch event": ("corporate", "Product Launch"),
     "headshot": ("corporate", "Headshot"),
+    "linkedin": ("corporate", "Headshot"),
     # Fashion
     "fashion": ("fashion", "Fashion"),
     "model": ("fashion", "Modeling Shoot"),
+    "modeling": ("fashion", "Modeling Shoot"),
+    "modelling": ("fashion", "Modeling Shoot"),
     "editorial": ("fashion", "Editorial"),
-    # Birthday
+    "lookbook": ("fashion", "Lookbook"),
+    "catalogue": ("fashion", "Catalogue Shoot"),
+    "catalog": ("fashion", "Catalogue Shoot"),
+    "runway": ("fashion", "Runway"),
+    "ramp": ("fashion", "Runway"),
+    "designer": ("fashion", "Fashion"),
+    "clothing": ("fashion", "Fashion"),
+    "apparel": ("fashion", "Fashion"),
+    "boutique": ("fashion", "Fashion"),
+    # Birthday and celebrations
     "birthday": ("birthday", "Birthday"),
+    "bday": ("birthday", "Birthday"),
     "party": ("birthday", "Party"),
     "anniversary": ("birthday", "Anniversary"),
+    "baby shower": ("birthday", "Baby Shower"),
+    "cake smash": ("birthday", "Birthday"),
     # Graduation
     "graduation": ("graduation", "Graduation"),
+    "graduate": ("graduation", "Graduation"),
     "convocation": ("graduation", "Convocation"),
+    "university": ("graduation", "Graduation"),
+    "college": ("graduation", "Graduation"),
+    "degree": ("graduation", "Graduation"),
+    "farewell": ("graduation", "Farewell"),
 }
 
 STYLE_KEYWORDS = {
@@ -102,24 +164,163 @@ STYLE_KEYWORDS = {
 }
 
 
+# Short names people type for a city.
+CITY_ALIASES = {
+    "pindi": "Rawalpindi",
+    "isb": "Islamabad",
+    "khi": "Karachi",
+    "lhr": "Lahore",
+    "fsd": "Faisalabad",
+}
+
+
+def _known_cities() -> list[str]:
+    """
+    Every city a photographer can be in: the built-in list plus whatever cities
+    photographers actually registered with. Without the second part, a buyer
+    who names a city outside the list gets no city filter at all, and so sees
+    photographers from everywhere.
+    """
+    cities = {c.lower(): c for c in PAKISTANI_CITIES}
+    try:
+        from apps.accounts.models import User
+        from apps.core.constants import UserRole
+
+        rows = (
+            User.objects.filter(role=UserRole.PHOTOGRAPHER)
+            .exclude(city="")
+            .values_list("city", flat=True)
+            .distinct()
+        )
+        for city in rows:
+            name = city.strip()
+            if name:
+                cities.setdefault(name.lower(), name)
+    except Exception:  # noqa: BLE001 — parsing must still work without a database
+        logger.debug("matchmaker: could not load cities from the database", exc_info=True)
+    return list(cities.values())
+
+
+def _find_city(text: str) -> str | None:
+    """The city named in the request. Longer names win, so a city whose name
+    contains a shorter one is not mistaken for it."""
+    for city in sorted(_known_cities(), key=len, reverse=True):
+        if re.search(rf"\b{re.escape(city)}\b", text, re.IGNORECASE):
+            return city
+    for alias, city in CITY_ALIASES.items():
+        if re.search(rf"\b{re.escape(alias)}\b", text, re.IGNORECASE):
+            return city
+    return None
+
+
+# An amount of money: optional currency, a number (Pakistani "1,50,000" and
+# decimals like "1.5" allowed), optional multiplier. It must not be followed by
+# a unit that makes it something else — "within 7 days" is a delivery time, not
+# a budget of Rs 7.
+_CURRENCY = r"(?:rs\.?|pkr|rupees?)"
+_MULTIPLIER = r"(?:k|thousand|lakhs?|lacs?)"
+_NOT_MONEY = r"(?!\s*(?:days?|weeks?|months?|years?|hours?|hrs?|h\b|mins?|minutes?|photos?|pictures?|pics?|images?|people|persons?|guests?|stars?|km|videos?|resolution)\b)"
+_AMOUNT = (
+    rf"(?P<cur>{_CURRENCY}\s*)?"
+    rf"(?P<num>\d+(?:[.,]\d+)*)(?![.,]?\d)"
+    rf"\s*(?P<mul>{_MULTIPLIER}\b)?"
+    rf"(?:\s*{_CURRENCY})?"
+    rf"{_NOT_MONEY}"
+)
+
+
 def _parse_price_value(raw: str) -> float | None:
-    """Convert representations like '40k', '40,000', '40 thousand' to float."""
-    clean = raw.lower().replace(",", "").replace(" ", "").replace("rs.", "").replace("rs", "").replace("pkr", "")
+    """Convert '40k', '40,000', '1,50,000', '1.5 lakh', 'Rs 40000' to a float."""
+    clean = raw.lower()
+    for word in ("rupees", "rupee", "rs.", "rs", "pkr"):
+        clean = clean.replace(word, "")
+    clean = clean.replace(",", "").replace(" ", "")
     multiplier = 1.0
-    if "k" in clean:
-        multiplier = 1000.0
-        clean = clean.replace("k", "")
-    elif "thousand" in clean:
-        multiplier = 1000.0
-        clean = clean.replace("thousand", "")
-    elif "lakh" in clean or "lac" in clean:
-        multiplier = 100000.0
-        clean = clean.replace("lakh", "").replace("lac", "")
+    for word, factor in (("thousand", 1000.0), ("lakhs", 100000.0), ("lakh", 100000.0),
+                         ("lacs", 100000.0), ("lac", 100000.0), ("k", 1000.0)):
+        if clean.endswith(word):
+            multiplier = factor
+            clean = clean[: -len(word)]
+            break
 
     try:
         return float(clean) * multiplier
     except (ValueError, TypeError):
         return None
+
+
+def _amount_value(match: re.Match, prefix: str = "") -> float | None:
+    """
+    The rupee value of an `_AMOUNT` match. A bare small number with no currency
+    and no multiplier ("under 5") is not taken as a budget — no photographer
+    charges Rs 5, and it is far more likely to be a count of something.
+    """
+    cur = match.group(f"{prefix}cur")
+    mul = match.group(f"{prefix}mul")
+    value = _parse_price_value(f"{match.group(f'{prefix}num')}{mul or ''}")
+    if value is None:
+        return None
+    if not cur and not mul and value < 1000:
+        return None
+    return value
+
+
+def _parse_budget(lower: str) -> tuple[float | None, float | None]:
+    """(min_price, max_price) named in the request, or None for each."""
+    amount_a = _AMOUNT.replace("?P<", "?P<a_")
+    amount_b = _AMOUNT.replace("?P<", "?P<b_")
+
+    # Range: "between 20k and 50k", "20k to 50k", "Rs 20,000 - 50,000"
+    range_match = re.search(
+        rf"(?:between\s*|from\s*)?{amount_a}\s*(?:and|to|-|–)\s*{amount_b}", lower
+    )
+    if range_match:
+        low = _amount_value(range_match, "a_")
+        high = _amount_value(range_match, "b_")
+        # "20 to 50k": the multiplier on the second number applies to both
+        if low is None and high is not None and not range_match.group("a_mul"):
+            raw_low = _parse_price_value(range_match.group("a_num"))
+            if raw_low is not None and range_match.group("b_mul"):
+                low = _parse_price_value(f"{range_match.group('a_num')}{range_match.group('b_mul')}")
+        if low is not None and high is not None and low < high:
+            return low, high
+
+    # Ceiling with the keyword before the amount: "under 50k", "budget is Rs 40,000"
+    # Every match is tried, so a number that is not money ("for 2 people")
+    # earlier in the sentence cannot hide the real budget after it.
+    before = re.finditer(
+        r"\b(?:under|below|less\s+than|not\s+more\s+than|no\s+more\s+than|at\s+most|"
+        r"up\s*to|upto|max(?:imum)?|within|budget(?:\s+(?:of|is|around|under|upto|up\s*to))?|"
+        r"around|approx(?:imately)?|for)\s*:?\s*" + _AMOUNT,
+        lower,
+    )
+    for match in before:
+        value = _amount_value(match)
+        if value is not None:
+            return None, value
+
+    # Ceiling with the keyword after: "50k budget", "40,000 max", "50k or less"
+    after = re.finditer(
+        _AMOUNT + r"\s*(?:budget|max(?:imum)?|or\s+less|or\s+below|or\s+under|only)\b",
+        lower,
+    )
+    for match in after:
+        value = _amount_value(match)
+        if value is not None:
+            return None, value
+
+    # A lone amount with a currency or multiplier: "Rs 50000", "60k"
+    amount = re.compile(_AMOUNT)
+    for lone in re.finditer(
+        rf"(?:\b{_CURRENCY}\s*\d|(?<![\d.,])\d[\d,.]*\s*{_MULTIPLIER}\b)", lower
+    ):
+        bare = amount.match(lower, lone.start())
+        if bare:
+            value = _amount_value(bare)
+            if value is not None:
+                return None, value
+
+    return None, None
 
 
 def _rule_based_parse(prompt: str) -> ShootConstraints:
@@ -130,41 +331,19 @@ def _rule_based_parse(prompt: str) -> ShootConstraints:
     lower = text.lower()
 
     # 1. City extraction
-    matched_city = None
-    for city in PAKISTANI_CITIES:
-        if re.search(rf"\b{re.escape(city)}\b", text, re.IGNORECASE):
-            matched_city = city
-            break
+    matched_city = _find_city(text)
 
     # 2. Event type and Category
     matched_category = None
     matched_event = None
     for keyword, (cat, evt) in EVENT_CATEGORY_MAP.items():
-        if re.search(rf"\b{re.escape(keyword)}\b", lower):
+        if re.search(rf"\b{re.escape(keyword)}(?:s|es)?\b", lower):
             matched_category = cat
             matched_event = evt
             break
 
     # 3. Budget / Price ceiling & floor
-    min_price = None
-    max_price = None
-
-    # Check for range: between X and Y
-    range_match = re.search(
-        r"between\s*(?:rs\.?|pkr)?\s*([0-9]+k?|[0-9]+,[0-9]+)\s*(?:and|to|-)\s*(?:rs\.?|pkr)?\s*([0-9]+k?|[0-9]+,[0-9]+)",
-        lower,
-    )
-    if range_match:
-        min_price = _parse_price_value(range_match.group(1))
-        max_price = _parse_price_value(range_match.group(2))
-    else:
-        # Check for ceiling: under / below / max / less than / budget of / within
-        max_match = re.search(
-            r"(?:under|below|less\s+than|max(?:imum)?\s+budget\s*(?:of)?|budget\s*(?:of|is|around|under|upto|up\s*to)?|within)\s*(?:rs\.?|pkr)?\s*([0-9]+(?:,[0-9]+)?(?:\s*k|\s*thousand)?)",
-            lower,
-        )
-        if max_match:
-            max_price = _parse_price_value(max_match.group(1))
+    min_price, max_price = _parse_budget(lower)
 
     # 4. Delivery turnaround days
     delivery_days = None
@@ -264,6 +443,97 @@ def parse_shoot_prompt(prompt: str) -> ShootConstraints:
 # 2. QUERYING & MULTI-FACTOR MATCHMAKER RANKING
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _rs(value) -> str:
+    return f"Rs. {int(value):,}"
+
+
+def _explain_no_match(constraints: ShootConstraints) -> str:
+    """
+    Say WHICH requirement nothing met, and what would work instead. "No
+    matches" alone leaves the buyer guessing whether the city, the budget or
+    something else was the problem.
+    """
+    from django.db.models import Max, Min
+
+    from apps.catalog.models import Service
+    from apps.profiles import selectors
+
+    city = constraints.city
+    where = f" in {city}" if city else ""
+
+    # 1. The city itself — nobody is listed there.
+    scope = selectors.visible_photographers()
+    if city:
+        scope = scope.filter(user__city__iexact=city)
+        if not scope.exists():
+            return (
+                f"No photographers are listed in {city} yet. "
+                "Try a nearby city, or leave the city out to search all of Pakistan."
+            )
+
+    # 2. The kind of photographer — none of that category there. Other kinds
+    #    are never offered instead: they are not what the buyer asked for.
+    if constraints.category:
+        kind = constraints.category.replace("_", " ")
+        scope = scope.filter(categories__slug=constraints.category)
+        if not scope.exists():
+            return (
+                f"No {kind} photographers are listed{where} yet. "
+                + ("Try a nearby city." if city else "Please check back soon.")
+            )
+        where = f"{where} for {kind} shoots"
+
+    # 3. The budget — nothing in the city is priced inside it.
+    if constraints.max_price is not None or constraints.min_price is not None:
+        prices = Service.objects.filter(
+            photographer__in=scope, is_active=True, is_deleted=False
+        ).aggregate(low=Min("price"), high=Max("price"))
+        low, high = prices["low"], prices["high"]
+        if low is not None:
+            in_range = Service.objects.filter(
+                photographer__in=scope, is_active=True, is_deleted=False
+            )
+            if constraints.max_price is not None:
+                in_range = in_range.filter(price__lte=constraints.max_price)
+            if constraints.min_price is not None:
+                in_range = in_range.filter(price__gte=constraints.min_price)
+            if not in_range.exists():
+                if constraints.min_price is not None and constraints.max_price is not None:
+                    return (
+                        f"Nothing{where} is priced between {_rs(constraints.min_price)} and "
+                        f"{_rs(constraints.max_price)}. Prices{where} range from {_rs(low)} "
+                        f"to {_rs(high)} — try a budget inside that range."
+                    )
+                if constraints.max_price is not None:
+                    return (
+                        f"Nothing{where} fits your budget of {_rs(constraints.max_price)}. "
+                        f"The lowest price{where} is {_rs(low)} — try a budget of at least "
+                        f"{_rs(low)}."
+                    )
+                return (
+                    f"Nothing{where} costs {_rs(constraints.min_price)} or more. "
+                    f"The highest price{where} is {_rs(high)}."
+                )
+
+    # 4. The quality filters — rating or verification.
+    extras = []
+    if constraints.min_rating:
+        extras.append(f"rated {constraints.min_rating:g}★ or higher")
+    if constraints.verified_only:
+        extras.append("verified")
+    if extras:
+        budget = f" within {_rs(constraints.max_price)}" if constraints.max_price is not None else ""
+        return (
+            f"No photographers{where}{budget} are {' and '.join(extras)}. "
+            "Try removing \"top rated\" or \"verified\" from your request."
+        )
+
+    return (
+        f"I couldn't find photographers{where} for that combination. "
+        "Try a higher budget, or leave out some details."
+    )
+
+
 def match_shoot(
     prompt: str,
     *,
@@ -307,24 +577,46 @@ def match_shoot(
             constraints.style = override_filters["style"]
 
     # 1. Retrieve candidates
-    queryset = selectors.visible_photographers()
+    #
+    # City and budget are hard requirements: a buyer who says "in Lahore under
+    # 50k" must never be shown a Karachi photographer or one whose cheapest
+    # shoot is 80k. They are filters, not just score factors.
+    # The event type works the same way: "mehndi" means a wedding photographer,
+    # so a corporate or fashion photographer is never a match for it.
+    def candidate_queryset():
+        queryset = selectors.visible_photographers()
 
-    if constraints.city:
-        queryset = queryset.filter(user__city__iexact=constraints.city)
+        if constraints.city:
+            queryset = queryset.filter(user__city__iexact=constraints.city)
 
-    if constraints.category:
-        queryset = queryset.filter(categories__slug=constraints.category)
+        if constraints.max_price is not None or constraints.min_price is not None:
+            in_budget = Service.objects.filter(
+                photographer=OuterRef("pk"), is_active=True, is_deleted=False
+            )
+            if constraints.max_price is not None:
+                in_budget = in_budget.filter(price__lte=constraints.max_price)
+            if constraints.min_price is not None:
+                in_budget = in_budget.filter(price__gte=constraints.min_price)
+            queryset = queryset.filter(Exists(in_budget))
 
-    if constraints.min_rating:
-        queryset = queryset.filter(avg_rating__gte=constraints.min_rating)
+        if constraints.category:
+            queryset = queryset.filter(categories__slug=constraints.category)
 
-    if constraints.verified_only:
-        queryset = queryset.filter(is_verified=True)
+        if constraints.min_rating:
+            queryset = queryset.filter(avg_rating__gte=constraints.min_rating)
+
+        if constraints.verified_only:
+            queryset = queryset.filter(is_verified=True)
+
+        return queryset
+
+    queryset = candidate_queryset()
 
     # Prefetch active services and candidate portfolio images
     services_prefetch = Prefetch(
         "services",
-        queryset=Service.objects.filter(is_active=True, is_deleted=False).order_by("price"),
+        queryset=Service.objects.filter(is_active=True, is_deleted=False)
+        .select_related("category").order_by("price"),
         to_attr="curated_services",
     )
     portfolio_prefetch = Prefetch(
@@ -337,16 +629,10 @@ def match_shoot(
         queryset.prefetch_related(services_prefetch, portfolio_prefetch).distinct()[:150]
     )
 
-    # If strict query returned few candidates (e.g., small city or narrow filter), widen gracefully
+    # No widening: showing a corporate photographer to someone who asked for a
+    # mehndi is a wrong answer, not a broader one. With few or no matches the
+    # buyer gets those few, or a message saying what to change.
     relaxed_notice = None
-    if len(candidates) < 3 and constraints.category:
-        # Widen to city-wide photographers
-        relaxed_notice = f"Widened search across all top photographers in {constraints.city or 'Pakistan'}."
-        candidates = list(
-            selectors.visible_photographers()
-            .prefetch_related(services_prefetch, portfolio_prefetch)
-            .distinct()[:150]
-        )
 
     scored_photographers: list[dict[str, Any]] = []
 
@@ -354,14 +640,32 @@ def match_shoot(
         services = getattr(p, "curated_services", [])
         images = getattr(p, "curated_images", [])
 
+        # The card shows "from Rs {base_price}". The stored column can be out
+        # of date (seeded data was never reconciled with the services), which
+        # made an in-budget photographer look over budget. Show the real
+        # cheapest active service instead; nothing is saved.
+        if services:
+            p.base_price = services[0].price
+
         # ─── Factor A: Budget Compatibility (Weight: 30%) ─────────────────────
         budget_score = 1.0
         best_service = None
 
         if constraints.max_price:
-            matching_services = [s for s in services if float(s.price) <= constraints.max_price]
+            matching_services = [
+                s for s in services
+                if float(s.price) <= constraints.max_price
+                and (constraints.min_price is None or float(s.price) >= constraints.min_price)
+            ]
             if matching_services:
-                best_service = matching_services[0]
+                # Quote a service of the kind asked for when one fits the
+                # budget, so a wedding request is not answered with the price
+                # of a birthday package.
+                same_kind = [
+                    s for s in matching_services
+                    if constraints.category and s.category.slug == constraints.category
+                ]
+                best_service = (same_kind or matching_services)[0]
                 budget_score = 1.0
             elif float(p.base_price) <= constraints.max_price:
                 budget_score = 0.95
@@ -370,7 +674,11 @@ def match_shoot(
                 excess_ratio = (float(p.base_price) - constraints.max_price) / max(1.0, constraints.max_price)
                 budget_score = max(0.2, 1.0 - excess_ratio)
         else:
-            best_service = services[0] if services else None
+            same_kind = [
+                s for s in services
+                if constraints.category and s.category.slug == constraints.category
+            ]
+            best_service = (same_kind or services)[0] if services else None
 
         # ─── Factor B: Delivery Turnaround Compatibility (Weight: 25%) ────────
         turnaround_score = 0.85
@@ -484,10 +792,7 @@ def match_shoot(
             f"Here are your top tailored recommendations:"
         )
     else:
-        assistant_message = (
-            "I couldn't find exact matches for that specific combination. "
-            "Try adjusting your budget or turnaround time to explore more options."
-        )
+        assistant_message = _explain_no_match(constraints)
 
     return {
         "assistant_message": assistant_message,
