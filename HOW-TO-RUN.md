@@ -72,9 +72,11 @@ folder; otherwise start your MySQL and Redis Windows services first.
 ## 1. Get the code
 
 ```bash
-git clone <your-repo-url> akasha
+git clone https://github.com/HassanAwan5005/Final-Year-Project.git akasha
 cd akasha
 ```
+
+The `main` branch holds the latest code.
 
 You should see:
 
@@ -88,6 +90,20 @@ akasha/
 ├── stop.sh      helper: stop the servers
 └── test.sh      helper: end-to-end API smoke test
 ```
+
+### What a clone does NOT include
+
+These are gitignored on purpose, so a fresh clone has none of them. The steps
+below create each one:
+
+| Not in the repo | Why | Created by |
+|---|---|---|
+| The database (`mysql-data/`) | Local data, not code | Steps A3, A5, A6 (create, migrate, seed) |
+| Uploaded images (`backend/media/`) | Portfolio and ad photos | Step A6 (`seed_portfolio`), or users uploading in the app |
+| Secrets (`backend/.env`) | Passwords and keys | Step A4 |
+| Python packages (`backend/.venv/`) | Installed per machine | Steps A1–A2 |
+| Node packages (`mobile/node_modules/`) | Installed per machine | Step B1 |
+| Trained ML models | Build products | Step C4 (optional) |
 
 ---
 
@@ -222,6 +238,15 @@ constraints using MySQL generated columns, because MySQL silently drops
 Django's `UniqueConstraint(condition=...)`. Do not skip them — the
 double-booking guard lives there.
 
+It also applies the data fixes added later, so always run it after pulling new
+code:
+
+| Migration | What it does |
+|---|---|
+| `catalog.0004_refresh_base_price` | Sets each photographer's "from Rs X" price to their cheapest service |
+| `marketplace.0008_product_is_sold` | Lets sellers mark an ad as sold |
+| `marketplace.0009_no_listing_approval` | Ads need no admin approval any more — puts waiting ads live |
+
 ## A6. Seed the database
 
 ```bash
@@ -229,9 +254,12 @@ double-booking guard lives there.
 ```
 
 Loads the real CSV datasets from `ml/data/raw/` — 200 photographers, 244
-buyers, 600 services, bookings, reviews, 125 marketplace products (including
-the downloadable product files written to `backend/private_media/`), and daily
-analytics rows. Takes a few minutes.
+buyers, 600 services, bookings, reviews, about 125 shop ads for camera and
+mobile gear (all live — ads need no admin approval), and daily analytics rows.
+Takes a few minutes.
+
+Every photographer gets coordinates in their city, which is what the Home
+screen's "Near me" uses.
 
 Then give photographers portfolio images — the "Find Similar Style" photo
 search has nothing to match against without them:
@@ -314,6 +342,10 @@ cd mobile
 npm install
 ```
 
+This includes `expo-location`, which the Home screen's "Near me" uses. Its
+permission message is set in `mobile/app.json`; Expo Go already contains the
+module, so nothing else needs installing.
+
 ## B2. Understand which SDK version this is
 
 The app is on **Expo SDK 58** (`expo@^58.0.0`, React Native 0.88,
@@ -389,6 +421,21 @@ Use any seeded account from the table in Step A8 — e.g.
 `buyer1@snapsphere.pk` / `buyer12345` — or register a new buyer through the
 sign-up screen.
 
+## B6. Try "Near me"
+
+On a buyer's Home screen, tap **Find photographers near me** and allow
+location. It lists the nearest photographers within 25 km, widening to 100 km
+and then 300 km if nobody is that close.
+
+All seeded photographers are in Pakistani cities. A phone or emulator located
+elsewhere sees "No photographers within 300 km". Emulators often default to
+California, so set a Pakistani location first:
+
+* **Android emulator:** ⋮ (Extended controls) → Location → search "Lahore" →
+  Set location.
+* **iOS simulator:** Features → Location → Custom Location — e.g. latitude
+  `31.5204`, longitude `74.3587` (Lahore).
+
 ---
 
 # Part C — Shortcuts and verification
@@ -421,9 +468,10 @@ With the server running:
 ./test.sh
 ```
 
-Exercises the live API the way the app does: registration, login, the JWT kill
-switch, blocked accounts, the database-level double-booking guard, the full
-booking lifecycle, wallet checkout, single-use download links, and the docs
+Exercises the live API the way the app does (147 checks): registration, login,
+the JWT kill switch, blocked accounts, the database-level double-booking guard,
+the full booking lifecycle, the shop and profile, the photographer studio,
+analytics, reviews, notifications, chat, administration, and the docs
 endpoints. Every check prints PASS or FAIL and the script exits non-zero on any
 failure, so it is CI-usable. It cleans up after itself and leaves the seeded
 data as it found it.
@@ -463,6 +511,29 @@ npx tsc --noEmit
 npx expo install --check     # report package drift against SDK 58
 ```
 
+## C6. Updating an existing copy
+
+When new code has been pushed, an existing setup needs more than `git pull`:
+
+```bash
+git pull
+
+cd backend
+.venv/bin/python -m pip install -r requirements/dev.txt   # new Python packages, if any
+.venv/bin/python manage.py migrate                        # new tables and data fixes
+
+cd ../mobile
+npm install                                               # new app packages (e.g. expo-location)
+npx expo start -c                                         # restart Expo with a clean cache
+```
+
+Then restart the API (`./stop.sh && ./start.sh`), and run the unit tests with
+`--create-db` once, because the migrations changed.
+
+Pulling does **not** reseed: your existing data stays, and the migrations fix
+it in place. Only run `seed_data --flush` if you want to start over — it wipes
+the database.
+
 ---
 
 # Troubleshooting
@@ -484,6 +555,11 @@ npx expo install --check     # report package drift against SDK 58
 | Photo search says "No style matches found" | No portfolio images exist yet. Run `manage.py seed_portfolio` (Step A6). |
 | `pytest` fails with `Access denied ... 'test_snapsphere'` | Grant the test database privilege from Step A3. |
 | `.env` changes have no effect on Django | The dev server caches settings at startup. Stop and restart `runserver`. |
+| `Unable to resolve module expo-location` | The app packages are out of date. Run `npm install` in `mobile/`, then `npx expo start -c`. |
+| "Near me" says no photographers within 300 km | The phone or emulator is not in Pakistan. Set a Pakistani location (Step B6). |
+| "Near me" asks to allow location access | Location permission was denied. Turn it on for Expo Go in the phone's settings. |
+| Prices, sold ads or "Post ad" behave like before | Migrations were not run after pulling. Run `manage.py migrate` (Step C6). |
+| Admin's "Pending listings" is always empty | Expected — ads go live without approval. Admins can still remove an ad. |
 
 ---
 
