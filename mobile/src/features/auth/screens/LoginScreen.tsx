@@ -77,6 +77,7 @@ export function LoginScreen({ resetEmail, onGoRegister, onGoForgot }: Props) {
         <View style={styles.logoMark}>
           <Text style={styles.logoGlyph}>S</Text>
         </View>
+        <Text style={styles.appName}>SnapSphere</Text>
         <Text style={styles.title}>Welcome</Text>
         <Text style={styles.subtitle}>
           Sign in to book Pakistan's best photographers
@@ -164,6 +165,12 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xl,
   },
   logoGlyph: { ...typography.display, color: colors.bg },
+  appName: {
+    ...typography.h2,
+    color: colors.gold,
+    letterSpacing: 0.5,
+    marginBottom: spacing.md,
+  },
   title: { ...typography.h1, color: colors.text, marginBottom: spacing.sm },
   subtitle: { ...typography.body, color: colors.sub, textAlign: 'center' },
   banner: {

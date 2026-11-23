@@ -86,6 +86,7 @@ export function RegisterScreen({ onGoLogin, onRegistered }: Props) {
 
   return (
     <Screen scroll>
+      <Text style={styles.appName}>SnapSphere</Text>
       <Text style={styles.title}>Create your account</Text>
       <Text style={styles.subtitle}>Takes less than a minute</Text>
 
@@ -244,7 +245,15 @@ export function RegisterScreen({ onGoLogin, onRegistered }: Props) {
 }
 
 const styles = StyleSheet.create({
-  title: { ...typography.h1, color: colors.text, marginTop: spacing.xxl },
+  // Same look as the app name on the login screen. It takes the top margin the
+  // title used to have, so the screen starts at the same height as before.
+  appName: {
+    ...typography.h2,
+    color: colors.gold,
+    letterSpacing: 0.5,
+    marginTop: spacing.xxl,
+  },
+  title: { ...typography.h1, color: colors.text, marginTop: spacing.sm },
   subtitle: { ...typography.body, color: colors.sub, marginBottom: spacing.xxl },
   sectionLabel: {
     ...typography.caption,
