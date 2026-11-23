@@ -33,7 +33,13 @@
       "expo-secure-store",
       "expo-image-picker",
       "expo-image",
-      "expo-status-bar"
+      "expo-status-bar",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "SnapSphere uses your location to show photographers near you."
+        }
+      ]
     ]
   }
 }

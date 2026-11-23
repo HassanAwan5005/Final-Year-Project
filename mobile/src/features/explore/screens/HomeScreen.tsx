@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -163,6 +164,62 @@ export function HomeScreen({
     }
   }, []);
 
+  // ─── Near me: photographers closest to the phone's location ────────────────
+  // Location is asked for only when the buyer taps "Near me", never on load.
+  // The server measures the distance and returns the nearest first.
+  const [nearMeLoading, setNearMeLoading] = useState(false);
+  const [nearMe, setNearMe] = useState<{
+    radiusKm: number;
+    photographers: PhotographerSummary[];
+    total: number;
+  } | null>(null);
+  const [nearMeError, setNearMeError] = useState<string | null>(null);
+
+  const findNearMe = useCallback(async () => {
+    setNearMeError(null);
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (!permission.granted) {
+        setNearMeError(
+          'Allow location access to see photographers near you. You can turn it on in your phone settings.',
+        );
+        return;
+      }
+      if (!(await Location.hasServicesEnabledAsync())) {
+        setNearMeError('Turn on location (GPS) on your phone, then try again.');
+        return;
+      }
+
+      setNearMeLoading(true);
+      const position =
+        (await Location.getLastKnownPositionAsync({ maxAge: 5 * 60 * 1000 })) ??
+        (await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }));
+      const { latitude: lat, longitude: lng } = position.coords;
+
+      // Start close; widen step by step if nobody is listed that near.
+      for (const radiusKm of [25, 100, 300]) {
+        const result = await photographersApi.list({
+          lat,
+          lng,
+          radius_km: radiusKm,
+          page_size: 10,
+        });
+        if (result.items.length > 0 || radiusKm === 300) {
+          setNearMe({
+            radiusKm,
+            photographers: result.items,
+            total: result.totalItems,
+          });
+          break;
+        }
+      }
+    } catch (err: any) {
+      setNearMeError(err?.message || 'Could not find your location. Please try again.');
+    } finally {
+      setNearMeLoading(false);
+    }
+  }, []);
+
   if (recommendations.isLoading && !recommendations.data) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
@@ -320,6 +377,71 @@ export function HomeScreen({
             </Pressable>
           )}
         />
+
+        {/* ─── Near me ─────────────────────────────────────────────────── */}
+        <View style={styles.sectionHeader}>
+          <Text style={[styles.sectionTitle, styles.nearMeTitle]}>Near me</Text>
+          {nearMe ? (
+            <Pressable
+              onPress={() => setNearMe(null)}
+              hitSlop={10}
+              accessibilityLabel="Hide photographers near me"
+            >
+              <Ionicons name="close" size={18} color={colors.sub} />
+            </Pressable>
+          ) : null}
+        </View>
+
+        {nearMeLoading ? (
+          <View style={styles.aiLoadingBox}>
+            <ActivityIndicator color={colors.gold} />
+            <Text style={styles.aiLoadingText}>Finding photographers near you…</Text>
+          </View>
+        ) : nearMe ? (
+          <>
+            <Text style={styles.nearMeSummary}>
+              {nearMe.photographers.length > 0
+                ? `${nearMe.total} photographer${nearMe.total === 1 ? '' : 's'} within ${nearMe.radiusKm} km, nearest first`
+                : `No photographers within ${nearMe.radiusKm} km of you yet.`}
+            </Text>
+            {nearMe.radiusKm > 25 && nearMe.photographers.length > 0 ? (
+              <View style={styles.relaxedNotice}>
+                <Ionicons name="information-circle-outline" size={14} color={colors.amber} />
+                <Text style={styles.relaxedText}>
+                  Nobody within 25 km, so the search was widened to {nearMe.radiusKm} km.
+                </Text>
+              </View>
+            ) : null}
+            <View style={styles.list}>
+              {nearMe.photographers.map((photographer) => (
+                <PhotographerCard
+                  key={`near-${photographer.id}`}
+                  photographer={photographer}
+                  onPress={() => openPhotographer(photographer.id, false)}
+                />
+              ))}
+            </View>
+          </>
+        ) : (
+          <View style={styles.list}>
+            <Pressable
+              onPress={findNearMe}
+              style={({ pressed }) => [styles.nearMeButton, pressed && styles.chipPressed]}
+              accessibilityRole="button"
+              accessibilityLabel="Find photographers near me"
+            >
+              <Ionicons name="location-outline" size={20} color={colors.gold} />
+              <View style={styles.nearMeButtonBody}>
+                <Text style={styles.categoryName}>Find photographers near me</Text>
+                <Text style={styles.categoryCount}>
+                  Uses your location to show the closest first
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={colors.sub} />
+            </Pressable>
+            {nearMeError ? <Text style={styles.nearMeError}>{nearMeError}</Text> : null}
+          </View>
+        )}
 
         {/* ─── AI recommendations ──────────────────────────────────────── */}
         <SectionHeader
@@ -541,6 +663,26 @@ const styles = StyleSheet.create({
   categoryName: { ...typography.bodyBold, color: colors.text },
   categoryCount: { ...typography.tiny, color: colors.sub, marginTop: 2 },
   list: { paddingHorizontal: spacing.xl },
+  nearMeTitle: { flex: 1 },
+  nearMeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  nearMeButtonBody: { flex: 1 },
+  nearMeSummary: {
+    ...typography.caption,
+    color: colors.sub,
+    paddingHorizontal: spacing.xl,
+    marginBottom: spacing.md,
+  },
+  nearMeError: { ...typography.tiny, color: colors.amber, marginTop: spacing.sm },
   relaxedNotice: {
     flexDirection: 'row',
     alignItems: 'center',

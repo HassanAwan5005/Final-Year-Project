@@ -122,6 +122,24 @@ class PhotographerViewSet(
         if lat is not None and lng is not None and radius:
             queryset = selectors.filter_by_radius(queryset, lat, lng, radius)
 
+            # "Near me": nearest first across ALL results, not just within one
+            # page, and only those truly inside the radius — the bounding box
+            # above is a square, so its corners reach ~1.4x the radius. The box
+            # has already narrowed this to a handful of rows, so measuring each
+            # one is cheap.
+            if not request.query_params.get("ordering"):
+                nearby = [
+                    p for p in selectors.annotate_distance(list(queryset), lat, lng)
+                    if p.distance_km is not None and p.distance_km <= radius
+                ]
+                nearby.sort(key=lambda p: p.distance_km)
+                page = self.paginate_queryset(nearby)
+                rows = page if page is not None else nearby
+                serializer = self.get_serializer(rows, many=True)
+                if page is not None:
+                    return self.get_paginated_response(serializer.data)
+                return Response(serializer.data)
+
         page = self.paginate_queryset(queryset)
         rows = page if page is not None else list(queryset)
 
