@@ -476,6 +476,13 @@ class Command(BaseCommand):
                     is_active=True,
                 )
                 created += 1
+            # The "from Rs X" on the card is the cheapest service, the same
+            # rule catalog/services._refresh_base_price applies on every edit.
+            # Left at the CSV price it sat above the cheapest tier, so cards
+            # overstated prices and budget searches missed photographers.
+            cheapest = min(mult for _, mult, _, _ in tiers)
+            profile.base_price = (profile.base_price * Decimal(str(cheapest))).quantize(Decimal("1"))
+            profile.save(update_fields=["base_price", "updated_at"])
         self._ok("services", created)
 
     def _seed_availability(self):
