@@ -1,8 +1,10 @@
 # SnapSphere — Project State
 
-**Last updated:** 17 August 2026
+**Last updated:** 23 November 2026
 **Next task:** Nothing is stubbed. Every module in §3 is complete. Remaining work
-is polish and hardening — see §17.
+is polish and hardening — see §18. What changed between August and November
+(the shop became an OLX-style classifieds board, booking became hour-based,
+Expo moved to SDK 58) is in §17.
 
 Read this first when resuming. It records what exists, what was decided and
 why, and exactly where to pick up.
@@ -12,7 +14,7 @@ why, and exactly where to pick up.
 ## 1. How to start working
 
 ```bash
-cd /Users/mac/Desktop/akasha
+cd /e/photographer-booking-app   # Windows: run in Git Bash, see HOW-TO-RUN.md
 ./start.sh          # MySQL + Redis + Django on :8000  (idempotent)
 ./test.sh           # 150-check API smoke test — should be ALL PASSED
 cd mobile && npx expo start
@@ -44,6 +46,10 @@ photographer `photographer1@snapsphere.pk` / `photographer123`.
 
 ## 2. Current size
 
+Measured 17 August 2026 and not re-measured since. On 23 November the backend
+had 608 `def test_` functions (parametrised cases make the pytest count
+higher).
+
 | Area | Files | Lines |
 |---|---|---|
 | Backend (Django) | 250 | 34,034 |
@@ -69,14 +75,14 @@ revenue snapshots.
 | 4 | **Buyer module** | ✅ **Complete — profile, wallet, top-ups, wishlist, purchases** |
 | 5 | **Photographer module** | ✅ **Complete — services & pricing, availability editing, profile editing** |
 | 6 | **Portfolio** | ✅ **Complete — upload with EXIF stripping, 3 renditions, albums, featuring** |
-| 7 | **Booking** | ✅ **Complete — state machine, API, calendar, screens** |
-| 8 | **Digital marketplace** | ✅ **Buyer-side complete — browse, cart, wallet checkout, secure downloads** |
-| 9 | **Reviews & ratings** | ✅ **Complete — write API, replies, helpful votes, sentiment, moderation, screens** |
-| 10 | AI recommendation | ✅ Pipelines, 3 models, live engine, explanations |
+| 7 | **Booking** | ✅ **Complete — state machine, API, hour-based calendar, 1 and 2 day packages, screens** |
+| 8 | **Shop** | ✅ **OLX-style — anyone sells camera/mobile gear, admin approves ads, buyers message the seller (no cart or checkout)** |
+| 9 | **Reviews & ratings** | ✅ **Complete — write API, replies, helpful votes, sentiment, moderation, editable at any time, screens** |
+| 10 | AI recommendation | ✅ Pipelines, 3 models, live engine, explanations, matchmaker, visual search |
 | 11 | Search & filters | ✅ 12 filters, 6 sorts, distance |
 | 12 | **Notifications** | ✅ **Complete — REST API, badges, preferences, quiet hours, devices, live bell** |
-| 13 | **Chat** | ✅ **Complete — REST + WebSocket, read watermark, mute/block, screens** |
-| 14 | **Admin** | ✅ **Complete — approvals, moderation, users, wallets, settings, broadcasts, audit log** |
+| 13 | **Chat** | ✅ **Complete — REST + WebSocket, read watermark, mute/block, delete for me / for everyone, smart replies, product threads, screens** |
+| 14 | **Admin** | ✅ **Complete — approvals, moderation, users, wallets, settings, broadcasts, audit log, Pending listings screen in the app** |
 | 15 | **Analytics** | ✅ **Photographer dashboard — rollups, revenue chart, funnel, top services** |
 | 16 | API docs | ✅ Auto-generated at `/api/v1/docs/` |
 | 17 | RN screens | ✅ **All 10 tabs live — no placeholder screens left** |
@@ -89,8 +95,11 @@ revenue snapshots.
 ## 4. What works right now
 
 **Auth** — register, login, JWT refresh with rotation, logout, `/me`,
-password reset, OTP, device registration. `token_version` kill switch and
-blocked-account checks enforced on **every** request.
+password reset, OTP, email verification (`/auth/verify-email/`,
+`/auth/resend-otp/`), device registration. `token_version` kill switch and
+blocked-account checks enforced on **every** request. A new account is not
+signed in automatically; it signs in on the login page. Admin accounts use the
+same login screen.
 
 **Discovery** —
 ```
@@ -100,6 +109,8 @@ GET /profiles/photographers/{id}/     services + portfolio + reviews + histogram
 GET /profiles/photographers/filters/  real cities + true price range
 GET /recommendations/                 ranked, with human-readable reasons
 GET /recommendations/status/          which model is live + its metrics
+POST /recommendations/matchmaker/     natural-language request → constraints → ranked list
+POST /recommendations/visual-search/  reference photo → photographers by aesthetic similarity
 ```
 
 **Bookings** —
@@ -119,18 +130,21 @@ GET /availability/photographers/{id}/day/     ?date=&duration_hours= → free st
 GET /availability/photographers/{id}/rules/   weekly working pattern
 ```
 
-**Shop** —
+**Shop** (OLX-style since Nov 2026, see §17) —
 ```
-GET  /marketplace/products/           search, 6 filters, 5 sorts, ?affordable=
-GET  /marketplace/products/{slug}/    + file manifest (names/sizes, never bytes)
+GET  /marketplace/products/           approved, published ads; search, filters, sorts
+GET  /marketplace/products/{slug}/    the ad page
 GET  /marketplace/products/filters/   real types + true price range
-GET/POST /marketplace/cart/ · /cart/add/ · /cart/remove/{id}/ · /cart/clear/
-POST /marketplace/orders/checkout/    wallet debit, Idempotency-Key honoured
-GET  /marketplace/orders/purchases/   the buyer's library
-POST /marketplace/orders/items/{id}/download/   mints a single-use ticket
+GET  /marketplace/products/featured|bestsellers/
+GET/POST /marketplace/seller/products/        own ads incl. "In review"; any buyer or photographer may sell
+GET/PATCH /marketplace/seller/products/{id}/  edit the whole ad, photos included
+GET  /marketplace/seller/products/summary/
+GET  /marketplace/orders/ · /orders/purchases/   receipts for orders placed before checkout was removed
+POST /marketplace/orders/items/{id}/download/   mints a single-use ticket (old orders)
 GET  /marketplace/download/{token}/   redeems it, streams once
-GET  /marketplace/seller/products/    own catalogue incl. drafts + summary
 ```
+There is no cart or checkout route any more. A buyer opens a chat with the
+seller from the ad (`POST /chat/conversations/` with the product).
 
 **Photographer studio (Modules 5 & 6)** —
 ```
@@ -161,13 +175,15 @@ GET    /reviews/products/{id}/               product reviews  (+ /summary/)
 POST   /reviews/                             one per completed booking, DB-enforced
 GET    /reviews/pending/                     what this buyer may review, both domains
 GET    /reviews/mine/                        what they have written
-PATCH  /reviews/{id}/                        24h window, and only before a reply
+PATCH  /reviews/{id}/                        any time, even after a reply; hidden reviews locked
 DELETE /reviews/{id}/                        withdraw; the entitlement stays spent
 POST   /reviews/{id}/helpful/                toggle, returns the state it left
 POST   /reviews/{id}/flag/                   into the one moderation queue
 POST/PATCH /reviews/{id}/reply/              the photographer's single public answer
 GET    /reviews/received/                    their inbox; ?unanswered=1
 POST   /reviews/products/                    review a purchase
+GET    /reviews/products/mine/               the buyer's product reviews
+PATCH  /reviews/products/{id}/edit/  ·  DELETE /reviews/products/{id}/remove/
 ```
 
 **Notifications (Module 12)** —
@@ -192,7 +208,9 @@ POST /chat/conversations/{id}/read/          moves the watermark, never backward
 POST /chat/conversations/{id}/mute|block|archive|leave/
 GET  /chat/conversations/unread-count/       the tab badge
 GET  /chat/conversations/contacts/           exactly who the server would allow
-PATCH/DELETE /chat/messages/{id}/            edit or withdraw your own
+GET  /chat/conversations/{id}/smart-replies/ quick-reply chips from calendar, services, prices
+PATCH/DELETE /chat/messages/{id}/            edit, or delete for everyone (live on both sides)
+POST /chat/messages/{id}/delete-for-me/      hides it from your side only
 POST /chat/messages/{id}/report/             into the same moderation queue
 ws://…/ws/chat/{id}/  ·  /ws/notifications/  ·  /ws/presence/
 ```
@@ -224,21 +242,27 @@ POST /profiles/me/wallet/topups/request/   receipt upload; credits NOTHING
 GET  /wishlist/ · POST /wishlist/toggle/   one endpoint for the heart icon
 ```
 
-**Mobile** — all five buyer tabs are live. Login / Register / Forgot password,
-Home (recommendations, categories, trending, featured), Explore (debounced
+**Mobile** — all five buyer tabs are live. Login / Register / Verify email /
+Forgot password, Home (recommendations, categories, trending), Explore (debounced
 search, filter sheet, infinite scroll), Photographer detail.
 **Booking flow**: request form with a real availability calendar, Bookings tab
 with four status tabs and badge counts, booking detail with timeline and
 server-driven action buttons, photographer Requests tab with one-tap accept and
 reason-required decline.
-**Shop flow**: product grid with search / type chips / "what I can afford",
-product page with the file manifest, cart with per-line availability and a
-server-computed shortfall, wallet checkout, and a Purchases library that opens
-each single-use download link in the OS.
-**Profile flow**: role-aware profile with stats, wallet card, availability
-toggle for photographers, wallet screen with the ledger and receipt-upload
-top-up sheet, Saved screen with photographer/product tabs, and the seller's
-catalogue + earnings behind the photographer's Profile tab.
+**Shop flow**: the Shop tab opens a Buy / Sell page for buyers and
+photographers alike. Buy is a grid with search and type chips; the ad page has
+a full-screen photo viewer, the seller's address and a "Message seller" button
+that opens a chat showing the product. Sell is a form with photos, title,
+description, category, price and a mandatory address; new and edited ads show
+"In review" under My listings until an admin approves them.
+**Profile flow**: role-aware profile with stats, availability toggle for
+photographers, a "verify your email" entry while the email is unverified,
+Saved screen with photographer/product tabs, and My listings. The wallet
+screen, balance card and top-up prompts were removed from the app (the
+backend routes still exist).
+**Admin**: an admin account signs in on the normal login screen and lands on a
+Pending listings screen to approve or reject ads, with the reason sent to the
+seller.
 **Dashboard**: live headline counters (pending requests, upcoming shoots),
 lifetime earnings, a six-month earnings bar chart with a growth badge, the
 discovery funnel, best-selling services and where the work comes from — all
@@ -270,20 +294,20 @@ change.
 
 | Decision | Why |
 |---|---|
-| **Expo SDK 54** — not 55/56/57 | Play Store Expo Go on the target device only supports 54. See `mobile/AGENTS.md`. Do NOT run `expo install expo@latest`. |
+| **Expo SDK 58** (moved from 54 in Nov 2026) | Expo Go supports one SDK at a time and the test devices run the SDK 58 build. See `mobile/AGENTS.md`. Do NOT change the SDK without confirming the Expo Go build on the test devices first. |
 | **Modular monolith**, not microservices | ADR-001 in `docs/01` |
 | **Ranker ships in "prior" mode** | The training data has no learnable signal (§6). This is deliberate and documented, not an unfinished model. |
 | **Sentiment trains on `yelp.csv`, displays generated prose** | Yelp is the right training corpus; its restaurant text is wrong for display. See `apps/core/review_text.py`. |
 | **Money is `DECIMAL`, serialized as a string** | JS floats cannot represent currency exactly |
 | **PKR is the platform currency** | Dataset prices ×100, rounded to nearest 500 |
-| **Wallet + admin-verified top-up**, no payment gateway | Proposal excludes online payments; wallet keeps downloads instant while staying in scope |
-| **Product files are never URL-addressable** | A digital product is worthless the moment its file URL leaks. `core/storage.py` makes `.url` raise; the only path to bytes is a redeemed `DownloadToken`. |
-| **Seller product upload is out of scope** | Needs private-file upload plus an admin moderation gate (Module 14). Sellers can still see their catalogue and earnings. |
+| **No payment gateway, and no money moves in the shop** | Proposal excludes online payments. The shop is now a classifieds board: buyer and seller agree in chat and settle off-platform. The wallet and admin-verified top-ups still exist in the backend but are no longer shown in the app. |
+| **Product files are never URL-addressable** | A digital product is worthless the moment its file URL leaks. `core/storage.py` makes `.url` raise; the only path to bytes is a redeemed `DownloadToken`. Still true for orders placed before checkout was removed. |
+| **Every new or edited ad goes through admin approval** | Any buyer or photographer can post an ad (seller is the user account, not the photographer profile). Changing photos, title, description or category sends a live ad back to review; changing only price or address keeps it live. Otherwise an approved ad could be swapped for anything. |
 | **Services are archived, not deleted, once booked** | `Booking.service` is PROTECT and the price is snapshotted. Deleting would break history; `can_delete` tells the UI which verb to offer. |
 | **Narrowing the calendar never cancels a booking** | A commitment already made stays made. Blocking a range reports how many bookings fall inside so the photographer cancels them deliberately, with a reason the buyer sees. |
 | **Portfolio upload strips EXIF** | Phone photos embed GPS. A newborn shoot would otherwise publish somebody's home address. Not an optimisation — a privacy requirement. |
 | **Dashboard mixes live counters with rolled-up charts** | A dashboard stale in its headline is untrustworthy; one that recomputes 12 months of revenue on every load is slow. Counters are indexed live queries, charts read the nightly rollup. |
-| **No chart library on mobile** | The project is pinned to Expo SDK 54 (`mobile/AGENTS.md`). A bar is a View with a height — a charting dependency buys nothing here and risks the native-module compatibility the pin protects. |
+| **No chart library on mobile** | The project is pinned to one Expo SDK (now 58, `mobile/AGENTS.md`). A bar is a View with a height — a charting dependency buys nothing here and risks the native-module compatibility the pin protects. |
 | **One review per booking, enforced by a OneToOne** | The serializer and the service both check it, but only the database cannot be reached around. To post N fake reviews an attacker must complete N real, paid bookings. |
 | **A 1★ or 2★ review must carry a comment** | A bare low rating moves an average with no information attached, and it is the one case where the platform must be able to answer "on what grounds?" if it is disputed. |
 | **Reviews are hidden, never deleted, by moderation** | A deleted review cannot be appealed. Hiding takes it out of the public average with a stored reason, and the row survives as evidence. |
@@ -496,6 +520,13 @@ it in seconds.
 
 ## 8. Module 7 — Booking (complete, 31 July 2026)
 
+> **Partly superseded (Nov 2026).** Booking is now hour-based: a booking
+> closes only its own hours, not the whole date, and `max_bookings` ("shoots
+> per day") is still stored but no longer enforced when computing
+> availability or creating a booking. So the
+> "capacity is checked before the exact slot" decision and the `max_bookings`
+> trap below are historical. See §17.
+
 ### How it is built
 
 `apps/bookings/services.py` is the only place a booking is created or moved.
@@ -577,6 +608,13 @@ silently degrades the path parameter to an untyped string. Guard with
 ---
 
 ## 9. Modules 8 & 4 — Shop and Profile (complete, 31 July 2026)
+
+> **Superseded (Nov 2026).** The cart, wallet checkout and (briefly) cash on
+> delivery have all been removed, and `test_checkout.py` was deleted with them.
+> The shop now sells physical camera and mobile gear as classified ads — see
+> §17. The checkout and cart material below describes the July design and is
+> kept for the record. The download-token and private-storage parts still
+> apply to old orders.
 
 ### What checkout guarantees
 
@@ -812,7 +850,7 @@ list of 13.
 
 | Decision | Why |
 |---|---|
-| **Editing is time-boxed AND reply-boxed** | 24 hours, and only while there is no reply. Once a photographer has answered publicly, editing the review above it would let a buyer rewrite the question their answer was given to. |
+| ~~**Editing is time-boxed AND reply-boxed**~~ **Superseded (Nov 2026):** a buyer may now edit or delete their photographer and product reviews at any time, even after a reply; only a review hidden by moderation is locked (`reviews/services._assert_editable`). | The original rule was 24 hours and only while there was no reply. Changed in commit `efd6c58`. |
 | **Withdrawing a review does not restore the entitlement** | `has_review` stays true. Otherwise delete-and-repost is an unlimited rating weapon aimed at one photographer. |
 | **A reply is OneToOne, not a thread** | An unbounded public back-and-forth turns a dispute into a spectacle. The chat module exists for the conversation. |
 | **Sub-ratings are nullable and average to `None`** | A photographer whose buyers never filled them in gets "not rated yet", not a damning zero. |
@@ -1042,21 +1080,131 @@ seeded database.
 
 ---
 
-## 17. What is left
+## 17. Changes since 17 August 2026
+
+Collected from the commits between `ff11de3` and `7341bca`. Sections 8–15
+describe each module as of the date in its heading; where this section
+contradicts them, this section is current.
+
+### Shop: digital store → OLX-style classifieds (Aug–Nov)
+
+* **Aug 20** — product types switched from presets/LUTs to physical gear:
+  camera accessories, mobile accessories, lenses, lighting & mics, gimbals &
+  tripods, other.
+* **Nov 22 (`efd6c58`)** — Shop tab became a Buy / Sell page. Any user can
+  sell; the seller on products and sales is now the user account (migration
+  `marketplace.0005` converted profile ids to user ids). New ads wait for
+  admin approval. Checkout briefly became cash on delivery with a delivery
+  address and an 11-digit `03XXXXXXXXX` phone (migration `0006`); the wallet
+  stopped being used for shop payments.
+* **Nov 22 (`a6b8c1e`)** — cart, checkout and cash on delivery removed
+  entirely (`CartScreen.tsx` and `test_checkout.py` deleted). Buyers message
+  the seller from the ad, and the chat thread carries the product
+  (`chat.0003_conversation_product`). Sellers edit the whole ad, photos
+  included (`services.update_listing`); content changes go back to review,
+  price and address stay live. Address is mandatory (`marketplace.0007`). A
+  full-screen photo viewer (`shop/components/PhotoViewer.tsx`) is shown to
+  everyone.
+* The `Order`, `OrderItem`, `CartItem` and `DownloadToken` models remain, so
+  old orders and their downloads still work. Nothing in the app creates new
+  orders.
+
+### Booking: hour-based (`b726e42`)
+
+* The booking form shows all 24 hours; taken hours are visible but disabled.
+  A booking closes only its own hours, not the whole date.
+* A date is bookable only if it has enough free hours in a row for the shoot,
+  and the shoot must finish by midnight. Fixed-price services always take their
+  full length.
+* 24-hour notice is checked per hour in Pakistan time. Part-day blocks
+  disable their hours. The calendar runs from the current month through the
+  next three.
+* **1 day (24h) and 2 day (48h) packages** book whole dates with no start
+  time; a 2 day booking can be completed from its last day. Migration
+  `catalog.0003` adds both to the standard tiers. Service length is limited to
+  24 hours, or exactly 48 for a 2 day package.
+* **Sundays open** — no weekday is off by default; `availability.0003`
+  reopened every weekday for existing photographers. The photographer calendar
+  no longer edits working hours or shoots per day. Search by date hides only
+  photographers with no free hour.
+
+### Accounts
+
+* **Email verification screen** (`6d60d37`) after sign-up (skippable) and
+  from Profile while unverified, with resend and "I already have a code".
+* **OTP fix:** wrong guesses were never counted, because raising inside the
+  transaction rolled the counter back, so the 10-attempt limit was never
+  reached. Now counted. The last 3 email verification codes stay valid until
+  they expire; password reset codes are still replaced by a new one. Resend
+  sends in the background.
+* After a password reset the login screen is pre-filled with that account's
+  email.
+* A new account signs in on the login page instead of automatically; the
+  login page says "Welcome" (`a6b8c1e`).
+
+### Chat
+
+* **Delete for everyone** now updates both sides live; **delete for me** is
+  new (`chat.0004_message_deleted_for`, `POST /chat/messages/{id}/delete-for-me/`).
+* **204 responses carry no body** (`core/renderers.py`). Android had reported
+  "no internet connection" after a successful delete because the envelope
+  renderer wrote a body on a 204.
+* **Smart replies** — `chat/ai.py` suggests quick-reply chips from the last
+  message's intent and the photographer's real calendar, services, prices and
+  turnaround (`GET /chat/conversations/{id}/smart-replies/`).
+* Presence socket with a heartbeat, so online status is correct.
+* The chat header no longer claims "End-to-End Encrypted" (messages are not);
+  it says "Messages are stored securely" (`7341bca`).
+
+### Reviews
+
+* Buyers may edit or delete photographer and product reviews at any time,
+  even after a reply; hidden reviews stay locked. Product review edit/remove
+  routes added. A "Write a review" card appears on a photographer's profile
+  when a completed booking is unreviewed; My Reviews lists product reviews.
+
+### Admin
+
+* Admins sign in on the normal login screen (`navigation/AdminNavigator.tsx`)
+  and get a **Pending listings** screen. The admin product queue includes
+  photos and description; rejecting a pending ad also unpublishes it, and the
+  reason is sent to the seller.
+
+### Recommendations and portfolio AI
+
+* **Conversational matchmaker** (`recommendations/matchmaker.py`,
+  `POST /recommendations/matchmaker/`) parses a natural-language request into
+  filters and ranks photographers.
+* **Visual search** (`POST /recommendations/visual-search/`) matches a
+  reference photo to portfolios by aesthetic similarity (`portfolio/ai.py`),
+  with its own tighter throttle.
+* Content-based recommendations added alongside the existing engine.
+
+### Home and platform
+
+* The FEATURED badge and the Home "Featured photographers" section were
+  removed (`62b7339`).
+* **Expo SDK 54 → 58** (React Native 0.88, React 19.3). `mobile/AGENTS.md`
+  records the SDK 58 notes.
+* **Windows support** — `start.sh`, `stop.sh` and `test.sh` detect Windows;
+  `HOW-TO-RUN.md` has the Git Bash steps.
+* `test.sh` was updated for hour-based booking and the shop changes. Its
+  check count has not been re-measured.
+
+## 18. What is left
 
 Nothing in §3 is stubbed. What remains is polish and hardening, none of it
 blocking a demo:
 
 | Item | Note |
 |---|---|
-| **Push provider** | The delivery bookkeeping is real and tested; the provider call is a log line. Needs FCM/Expo credentials, and `expo-notifications` is a native dependency that must be checked against the SDK 54 pin first. |
-| **Seller product upload** | Still out of scope (§5). The moderation gate it needs now exists — `POST /admin/products/{id}/approve` — so this is a smaller job than it was. |
+| **Push provider** | The delivery bookkeeping is real and tested; the provider call is a log line. Needs FCM/Expo credentials, and `expo-notifications` is a native dependency that must be checked against the SDK 58 pin first. |
 | **Email delivery** | `EMAIL_BACKEND` is the console backend. `NotificationDelivery` already models the EMAIL channel. |
 | **`consumers.py` coverage** | The WebSocket path is hand-tested. Both transports write through the same service, so the rules are covered even where the socket is not. |
 | **Per-user chat archiving** | Currently one column on the conversation, so it hides the thread for both sides. |
 | **Spread seeded `BuyerInteraction` rows over history** | Would fill the discovery funnel in the demo. Deliberately not done — see §11's "known data limitation". |
 
-## 18. Where things live
+## 19. Where things live
 
 ```
 akasha/
@@ -1072,9 +1220,9 @@ akasha/
 │                                  · serializers · views · urls · tasks · tests
 ├── mobile/src/
 │   ├── api/                       client (single-flight refresh) · config · queryKeys
-│   ├── navigation/                Root · Auth · Buyer(stack+tabs) · Photographer(stack+tabs)
+│   ├── navigation/                Root · Auth · Buyer(stack+tabs) · Photographer(stack+tabs) · Admin
 │   ├── features/<feature>/        screens · components · hooks
-│   │                              (+ reviews · notifications · chat)
+│   │                              (+ reviews · notifications · chat · admin)
 │   ├── components/                ui · feedback · layout
 │   └── theme/                     colours from the original prototype
 ├── ml/
