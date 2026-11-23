@@ -976,6 +976,10 @@ class Command(BaseCommand):
         for seller in sellers:
             for ptype, name, lo, hi in random.sample(templates, random.randint(1, 3)):
                 price = Decimal(str(random.randrange(lo, hi, 100)))
+                # Ads need no admin approval any more, so every one is live.
+                # This draw used to decide approval; it stays so the values
+                # seeded after it (dates, counts) do not shift.
+                random.random()
                 DigitalProduct.objects.create(
                     seller=seller.user,
                     category=seller.categories.first(),
@@ -990,7 +994,7 @@ class Command(BaseCommand):
                     price=price,
                     compare_at_price=price * Decimal("1.5"),
                     is_published=True,
-                    is_approved=random.random() < 0.9,
+                    is_approved=True,
                     published_at=timezone.now() - timedelta(days=random.randint(1, 300)),
                     sales_count=random.randint(0, 180),
                     view_count=random.randint(50, 4000),

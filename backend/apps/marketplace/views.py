@@ -310,8 +310,8 @@ class SellerProductViewSet(MessageResponseMixin, GenericViewSet):
     """
     A seller's own catalogue and sales — buyers and photographers alike.
 
-    `create` lists a new product from the Sell screen. It goes into the admin
-    moderation queue and appears in the shop once approved. `partial_update`
+    `create` lists a new product from the Sell screen. It is live in the shop
+    straight away; there is no admin approval step. `partial_update`
     edits the whole ad, photos included (see `services.update_listing`).
     """
 
@@ -324,7 +324,10 @@ class SellerProductViewSet(MessageResponseMixin, GenericViewSet):
         "list": "Your products retrieved",
         "summary": "Sales summary retrieved",
         "partial_update": "Your ad is updated",
-        "create": "Submitted — your product will appear in the shop once approved",
+        "mark_sold": "Marked as sold",
+        "mark_available": "Back on sale",
+        "destroy": "Your ad is deleted",
+        "create": "Your ad is live in the shop",
     }
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
@@ -401,3 +404,36 @@ class SellerProductViewSet(MessageResponseMixin, GenericViewSet):
                 product, context=self.get_serializer_context()
             ).data
         )
+
+    @extend_schema(
+        summary="Mark your ad as sold — it leaves the shop",
+        request=None,
+        responses=SellerProductSerializer,
+    )
+    @action(detail=True, methods=["post"], url_path="mark-sold")
+    def mark_sold(self, request, pk=None):
+        product = services.set_listing_sold(
+            request.user, self._own_product(pk).pk, sold=True
+        )
+        return Response(
+            SellerProductSerializer(product, context=self.get_serializer_context()).data
+        )
+
+    @extend_schema(
+        summary="Put a sold ad back on sale",
+        request=None,
+        responses=SellerProductSerializer,
+    )
+    @action(detail=True, methods=["post"], url_path="mark-available")
+    def mark_available(self, request, pk=None):
+        product = services.set_listing_sold(
+            request.user, self._own_product(pk).pk, sold=False
+        )
+        return Response(
+            SellerProductSerializer(product, context=self.get_serializer_context()).data
+        )
+
+    @extend_schema(summary="Delete your own ad", responses={204: None})
+    def destroy(self, request, pk=None):
+        services.delete_listing(request.user, self._own_product(pk).pk)
+        return Response(status=http.HTTP_204_NO_CONTENT)

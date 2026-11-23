@@ -100,6 +100,10 @@ class DigitalProduct(UUIDModel, BaseModel):
     )
     is_featured = models.BooleanField(default=False)
     published_at = models.DateTimeField(null=True, blank=True)
+    # Marked sold by its seller. A sold ad leaves the shop but stays in the
+    # seller's listings (and can be put back on sale); it is not a delete.
+    is_sold = models.BooleanField(default=False, db_index=True)
+    sold_at = models.DateTimeField(null=True, blank=True)
 
     # ─── Denormalised metrics ────────────────────────────────────────────────
     sales_count = models.PositiveIntegerField(default=0, db_index=True)
@@ -144,7 +148,10 @@ class DigitalProduct(UUIDModel, BaseModel):
 
     @property
     def is_purchasable(self) -> bool:
-        return self.is_published and self.is_approved and not self.is_deleted
+        return (
+            self.is_published and self.is_approved
+            and not self.is_deleted and not self.is_sold
+        )
 
     @property
     def discount_percent(self) -> int:

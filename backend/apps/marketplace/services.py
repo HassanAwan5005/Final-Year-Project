@@ -123,9 +123,8 @@ def create_listing(
     """
     List a product for sale — open to buyers and photographers alike.
 
-    The listing is published straight away but NOT approved: it waits in the
-    admin moderation queue (`is_published=True, is_approved=False`) and only
-    appears in the shop once an admin approves it.
+    The listing is live in the shop straight away — there is no admin approval
+    step. An admin can still take an ad down afterwards (`unpublish_product`).
 
     The first photo becomes the thumbnail; every photo is kept as a preview,
     stored as a storage-relative path like the seeded products.
@@ -142,7 +141,7 @@ def create_listing(
         address=address.strip(),
         file_count=0,
         is_published=True,
-        is_approved=False,
+        is_approved=True,
         published_at=timezone.now(),
     )
     _set_cover(product, photos[0])
@@ -171,10 +170,8 @@ def update_listing(
     `keep_photos` are the existing photos to keep, in order; `photos` are new
     uploads added after them. Anything not kept is removed.
 
-    Moderation still holds: changing only the price or address leaves a live
-    ad live, but changing what the admin judged (photos, title, description,
-    category) sends it back to the review queue. Otherwise an approved ad could
-    be swapped for anything. Editing an ad that is not live submits it again.
+    There is no review step: a live ad stays live through any edit. An ad an
+    admin took down stays down — editing it does not put it back in the shop.
     """
     product = (
         DigitalProduct.objects.select_for_update()
@@ -195,14 +192,6 @@ def update_listing(
 
     title = title.strip()
     description = description.strip()
-    content_changed = (
-        paths != current
-        or title != product.title
-        or _plain(description) != _plain(product.description)
-        or product_type != product.product_type
-    )
-    needs_review = content_changed or not product.is_purchasable
-
     old_thumbnail = product.thumbnail.name if product.thumbnail else ""
     if not old_thumbnail or paths[0] != current[0]:
         if keep_photos:
@@ -219,9 +208,6 @@ def update_listing(
     product.product_type = product_type
     product.address = address.strip()
     product.preview_images = paths
-    if needs_review:
-        product.is_published = True
-        product.is_approved = False
     product.save()
 
     removed = ({*current, old_thumbnail} - {*paths, product.thumbnail.name}) - {""}
@@ -229,14 +215,60 @@ def update_listing(
 
     logger.info(
         "Listing updated",
-        extra={"product_id": product.pk, "seller_id": user.pk, "review": needs_review},
+        extra={"product_id": product.pk, "seller_id": user.pk},
     )
     return product
 
 
-def _plain(text: str) -> str:
-    """Multipart bodies may carry CRLF line endings; they are not an edit."""
-    return text.replace("\r\n", "\n").strip()
+@transaction.atomic
+def set_listing_sold(user, product_id: int, *, sold: bool) -> DigitalProduct:
+    """
+    Mark your own ad sold, or put it back on sale.
+
+    A sold ad leaves the shop at once, and chats about it show it as no longer
+    available, but it stays in the seller's listings so it can be relisted if
+    the deal falls through. Relisting needs no new review: nothing the admin
+    judged has changed.
+    """
+    product = (
+        DigitalProduct.objects.select_for_update()
+        .filter(pk=product_id, seller=user, is_deleted=False)
+        .first()
+    )
+    if product is None:
+        raise BusinessRuleViolation("Listing not found.")
+    if product.is_sold != sold:
+        product.is_sold = sold
+        product.sold_at = timezone.now() if sold else None
+        product.save(update_fields=["is_sold", "sold_at", "updated_at"])
+        logger.info(
+            "Listing marked %s", "sold" if sold else "available",
+            extra={"product_id": product.pk, "seller_id": user.pk},
+        )
+    return product
+
+
+@transaction.atomic
+def delete_listing(user, product_id: int) -> None:
+    """
+    Delete your own ad. It disappears from the shop and from your listings.
+
+    A soft delete: past orders point at the product (PROTECT), and chats about
+    it keep their history, showing the ad as no longer available.
+    """
+    product = (
+        DigitalProduct.objects.select_for_update()
+        .filter(pk=product_id, seller=user, is_deleted=False)
+        .first()
+    )
+    if product is None:
+        raise BusinessRuleViolation("Listing not found.")
+    product.is_deleted = True
+    product.deleted_at = timezone.now()
+    product.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
+    logger.info(
+        "Listing deleted", extra={"product_id": product.pk, "seller_id": user.pk}
+    )
 
 
 def _set_cover(product: DigitalProduct, photo) -> None:

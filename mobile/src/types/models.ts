@@ -531,6 +531,8 @@ export interface DigitalProductDetail extends DigitalProduct {
   preview_images: string[];
   preview_image_urls: string[];
   preview_video_url: string;
+  /** Only ever true when the seller opens their own sold ad. */
+  is_sold: boolean;
   files: ProductFile[];
   view_count: number;
   wishlist_count: number;
@@ -595,6 +597,9 @@ export interface SellerProduct extends DigitalProduct {
   view_count: number;
   wishlist_count: number;
   total_revenue: string;
+  /** Marked sold by the seller: out of the shop, still in My listings. */
+  is_sold: boolean;
+  sold_at: string | null;
 }
 
 /** One of the seller's own ads, as the edit form needs it. */

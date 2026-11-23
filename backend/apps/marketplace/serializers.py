@@ -105,7 +105,7 @@ class ProductDetailSerializer(ProductListSerializer):
         fields = ProductListSerializer.Meta.fields + (
             "description", "address", "compatible_with", "tags",
             "preview_images", "preview_image_urls", "preview_video_url",
-            "files", "view_count", "wishlist_count", "published_at",
+            "files", "view_count", "wishlist_count", "published_at", "is_sold",
         )
 
     def get_preview_image_urls(self, obj) -> list[str]:
@@ -201,7 +201,7 @@ class SellerProductSerializer(ProductListSerializer):
     class Meta(ProductListSerializer.Meta):
         fields = ProductListSerializer.Meta.fields + (
             "is_published", "is_approved", "published_at", "view_count",
-            "wishlist_count", "total_revenue",
+            "wishlist_count", "total_revenue", "is_sold", "sold_at",
         )
 
 

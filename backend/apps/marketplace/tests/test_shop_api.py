@@ -223,7 +223,7 @@ def test_buyers_and_photographers_can_list_a_product(request, client_fixture, se
     body = response.json()["data"]
     assert body["title"] == "Canon 50mm f/1.8 lens"
     assert body["is_published"] is True
-    assert body["is_approved"] is False          # waits for admin approval
+    assert body["is_approved"] is True           # live at once — no admin approval
     assert body["thumbnail_url"]
     rows = client.get(f"{URL}seller/products/").json()["data"]
     assert [r["slug"] for r in rows] == [body["slug"]]
@@ -236,14 +236,26 @@ def test_a_listing_needs_a_photo(buyer_client):
     assert response.status_code == 400
 
 
-def test_an_unapproved_listing_is_not_in_the_shop(buyer_client, settings, tmp_path):
+def test_a_new_listing_is_in_the_shop_straight_away(
+    buyer_client, other_buyer_client, settings, tmp_path
+):
     settings.MEDIA_ROOT = tmp_path
     slug = buyer_client.post(
         f"{URL}seller/products/", _listing(), format="multipart"
     ).json()["data"]["slug"]
 
-    rows = buyer_client.get(f"{URL}products/").json()["data"]
-    assert slug not in [r["slug"] for r in rows]
+    rows = other_buyer_client.get(f"{URL}products/").json()["data"]
+    assert slug in [r["slug"] for r in rows]
+
+
+def test_an_ad_an_admin_removed_is_not_in_the_shop(
+    buyer_client, other_buyer_client, settings, tmp_path
+):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    DigitalProduct.objects.filter(pk=listing.pk).update(is_approved=False)
+
+    rows = other_buyer_client.get(f"{URL}products/").json()["data"]
+    assert listing.slug not in [r["slug"] for r in rows]
 
 
 @pytest.mark.parametrize("address", [None, "", "    ", "abc"])
@@ -364,7 +376,7 @@ def test_a_photo_shared_with_another_listing_is_not_deleted(
     assert (tmp_path / first).exists()
 
 
-def test_changing_the_content_of_a_live_ad_sends_it_back_to_review(
+def test_changing_the_content_of_a_live_ad_keeps_it_live(
     buyer_client, settings, tmp_path
 ):
     listing = _live_listing(buyer_client, settings, tmp_path)
@@ -373,7 +385,7 @@ def test_changing_the_content_of_a_live_ad_sends_it_back_to_review(
     listing.refresh_from_db()
     assert listing.title == "Canon 85mm f/1.8 lens"
     assert listing.is_published is True
-    assert listing.is_approved is False
+    assert listing.is_approved is True
 
 
 def test_changing_only_the_price_or_address_keeps_the_ad_live(
@@ -389,15 +401,15 @@ def test_changing_only_the_price_or_address_keeps_the_ad_live(
     assert listing.is_approved is True
 
 
-def test_editing_a_rejected_ad_submits_it_again(buyer_client, settings, tmp_path):
+def test_editing_an_ad_an_admin_removed_does_not_put_it_back(
+    buyer_client, settings, tmp_path
+):
     listing = _live_listing(buyer_client, settings, tmp_path)
-    DigitalProduct.objects.filter(pk=listing.pk).update(
-        is_published=False, is_approved=False
-    )
-    assert _edit(buyer_client, listing).status_code == 200
+    DigitalProduct.objects.filter(pk=listing.pk).update(is_approved=False)
+    assert _edit(buyer_client, listing, title="Edited after removal").status_code == 200
 
     listing.refresh_from_db()
-    assert listing.is_published is True
+    assert listing.title == "Edited after removal"
     assert listing.is_approved is False
 
 
@@ -448,3 +460,89 @@ def test_a_seller_can_open_their_own_ad_while_in_review(
 
     assert buyer_client.get(url).status_code == 200
     assert other_buyer_client.get(url).status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MARK AS SOLD / DELETE
+# ═══════════════════════════════════════════════════════════════════════════
+def test_a_sold_ad_leaves_the_shop_but_stays_in_my_listings(
+    buyer_client, other_buyer_client, settings, tmp_path
+):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    response = buyer_client.post(f"{URL}seller/products/{listing.pk}/mark-sold/")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["is_sold"] is True
+    assert other_buyer_client.get(f"{URL}products/").json()["data"] == []
+    assert other_buyer_client.get(f"{URL}products/{listing.slug}/").status_code == 404
+
+    mine = buyer_client.get(f"{URL}seller/products/").json()["data"]
+    assert [(row["id"], row["is_sold"]) for row in mine] == [(listing.pk, True)]
+    summary = buyer_client.get(f"{URL}seller/products/summary/").json()["data"]
+    assert summary["products_live"] == 0
+    # The seller can still open their own sold ad.
+    assert buyer_client.get(f"{URL}products/{listing.slug}/").json()["data"]["is_sold"] is True
+
+
+def test_a_sold_ad_can_go_back_on_sale_without_a_new_review(
+    buyer_client, other_buyer_client, settings, tmp_path
+):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    buyer_client.post(f"{URL}seller/products/{listing.pk}/mark-sold/")
+    response = buyer_client.post(f"{URL}seller/products/{listing.pk}/mark-available/")
+
+    assert response.status_code == 200
+    listing.refresh_from_db()
+    assert (listing.is_sold, listing.sold_at, listing.is_approved) == (False, None, True)
+    assert [row["slug"] for row in other_buyer_client.get(f"{URL}products/").json()["data"]] == [
+        listing.slug
+    ]
+
+
+def test_repricing_a_sold_ad_does_not_send_it_to_review(buyer_client, settings, tmp_path):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    buyer_client.post(f"{URL}seller/products/{listing.pk}/mark-sold/")
+
+    assert _edit(buyer_client, listing, price="9000").status_code == 200
+    listing.refresh_from_db()
+    assert (listing.is_sold, listing.is_approved) == (True, True)
+
+
+def test_a_chat_about_a_sold_ad_shows_it_unavailable(
+    buyer_client, other_buyer_client, other_buyer, settings, tmp_path
+):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    seller = listing.seller
+    thread = other_buyer_client.post(
+        "/api/v1/chat/conversations/", {"user": seller.pk, "product": listing.pk}
+    ).json()["data"]
+    buyer_client.post(f"{URL}seller/products/{listing.pk}/mark-sold/")
+
+    again = other_buyer_client.get(f"/api/v1/chat/conversations/{thread['id']}/").json()["data"]
+    assert again["product"]["is_available"] is False
+
+
+def test_a_seller_can_delete_their_ad(buyer_client, other_buyer_client, settings, tmp_path):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    response = buyer_client.delete(f"{URL}seller/products/{listing.pk}/")
+
+    assert response.status_code == 204
+    assert buyer_client.get(f"{URL}seller/products/").json()["data"] == []
+    assert other_buyer_client.get(f"{URL}products/").json()["data"] == []
+    assert buyer_client.get(f"{URL}seller/products/{listing.pk}/").status_code == 404
+    # Soft delete: the row stays for past orders and chat history.
+    assert DigitalProduct.all_objects.filter(pk=listing.pk, is_deleted=True).exists()
+
+
+def test_nobody_else_can_sell_out_or_delete_the_ad(
+    buyer_client, other_buyer_client, photographer_client, api_client, settings, tmp_path
+):
+    listing = _live_listing(buyer_client, settings, tmp_path)
+    base = f"{URL}seller/products/{listing.pk}/"
+
+    for client in (other_buyer_client, photographer_client):
+        assert client.post(f"{base}mark-sold/").status_code == 404
+        assert client.delete(base).status_code == 404
+    assert api_client.delete(base).status_code == 401
+    listing.refresh_from_db()
+    assert (listing.is_sold, listing.is_deleted) == (False, False)

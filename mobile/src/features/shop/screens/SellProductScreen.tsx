@@ -45,8 +45,8 @@ const PRODUCT_TYPES = [
  * The Sell form — open to buyers and photographers.
  *
  * Asks for the product photos and a description (plus a title, category, price
- * and address, which every listing in the shop needs). The listing goes to the
- * admin review queue and appears in the shop once approved.
+ * and address, which every listing in the shop needs). The listing is live in
+ * the shop as soon as it is posted — there is no admin approval step.
  *
  * With a `listing` it edits that ad instead, photos included.
  */
@@ -152,8 +152,8 @@ export function SellProductScreen({
             updated.is_published && updated.is_approved
               ? done('Ad updated', 'Your changes are live in the shop.')
               : done(
-                  'Submitted for review',
-                  'Your changes are saved. The ad will appear in the shop again once an admin approves it.',
+                  'Changes saved',
+                  'Your changes are saved, but this ad was removed by our team and is not in the shop.',
                 ),
           onError,
         },
@@ -163,8 +163,8 @@ export function SellProductScreen({
     createListing.mutate(payload, {
       onSuccess: () =>
         done(
-          'Submitted for review',
-          'Your product will appear in the shop once an admin approves it. You can track it under My listings.',
+          'Ad posted',
+          'Your ad is live in the shop. You can manage it under My listings.',
         ),
       onError,
     });
@@ -298,19 +298,19 @@ export function SellProductScreen({
 
           <Text style={styles.footnote}>
             {listing
-              ? 'Price and address changes go live right away. Other changes to the ad are reviewed by our team first.'
-              : 'New listings are reviewed by our team before they appear in the shop.'}
+              ? 'Your changes go live in the shop as soon as you save.'
+              : 'Your ad goes live in the shop as soon as you post it.'}
           </Text>
         </ScrollView>
 
         <View style={styles.bar}>
           {problems.length && !isPending ? (
             <Text style={styles.missing} numberOfLines={2}>
-              {listing ? 'To save' : 'To submit'}: {problems.join(', ')}.
+              {listing ? 'To save' : 'To post'}: {problems.join(', ')}.
             </Text>
           ) : null}
           <Button
-            label={listing ? 'Save changes' : 'Submit for sale'}
+            label={listing ? 'Save changes' : 'Post ad'}
             onPress={submit}
             disabled={!canSubmit}
             loading={isPending}

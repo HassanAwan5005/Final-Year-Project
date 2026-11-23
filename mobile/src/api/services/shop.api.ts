@@ -141,6 +141,21 @@ export const shopApi = {
       }),
     );
   },
+
+  /** Sold: the ad leaves the shop. Not sold: it goes back on sale. */
+  setListingSold(id: number, sold: boolean) {
+    return unwrap<SellerProduct>(
+      api.post(
+        sold
+          ? ENDPOINTS.marketplace.sellerProductMarkSold(id)
+          : ENDPOINTS.marketplace.sellerProductMarkAvailable(id),
+      ),
+    );
+  },
+
+  async deleteListing(id: number): Promise<void> {
+    await api.delete(ENDPOINTS.marketplace.sellerProduct(id));
+  },
 };
 
 function listingForm(payload: CreateListingPayload): FormData {

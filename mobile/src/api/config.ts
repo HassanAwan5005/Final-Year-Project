@@ -148,6 +148,9 @@ export const ENDPOINTS = {
     download: (itemId: number | string) => `/marketplace/orders/items/${itemId}/download/`,
     sellerProducts: '/marketplace/seller/products/',
     sellerProduct: (id: number) => `/marketplace/seller/products/${id}/`,
+    sellerProductMarkSold: (id: number) => `/marketplace/seller/products/${id}/mark-sold/`,
+    sellerProductMarkAvailable: (id: number) =>
+      `/marketplace/seller/products/${id}/mark-available/`,
     sellerSummary: '/marketplace/seller/products/summary/',
   },
   profiles: {

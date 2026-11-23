@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import React, { useState } from 'react';
 import {
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -21,7 +22,12 @@ import { colors, radius, spacing, typography } from '../../../theme';
 import { formatPKR } from '../../../utils/format';
 import { PhotoViewer } from '../components/PhotoViewer';
 import { ProductThumb } from '../components/ProductThumb';
-import { useProduct, useToggleWishlist } from '../hooks/useShop';
+import {
+  useDeleteListing,
+  useProduct,
+  useSetListingSold,
+  useToggleWishlist,
+} from '../hooks/useShop';
 
 /**
  * A product page.
@@ -43,6 +49,8 @@ export function ProductDetailScreen({
   const { width } = useWindowDimensions();
   const query = useProduct(slug);
   const toggleSave = useToggleWishlist();
+  const setSold = useSetListingSold();
+  const deleteListing = useDeleteListing();
   const userId = useAuthStore((s) => s.user?.id);
   const [viewing, setViewing] = useState<number | null>(null);
 
@@ -225,7 +233,56 @@ export function ProductDetailScreen({
       {/* ─── Action bar ──────────────────────────────────────────────────── */}
       <View style={styles.actionBar}>
         {isMine ? (
-          <Button label="Edit ad" onPress={() => onEdit(product.id)} />
+          <>
+            {product.is_sold ? (
+              <Text style={styles.soldNote}>
+                Marked as sold — buyers no longer see this ad in the shop.
+              </Text>
+            ) : null}
+            <Button label="Edit ad" onPress={() => onEdit(product.id)} />
+            <View style={styles.ownerActions}>
+              <Button
+                label={product.is_sold ? 'Mark as available' : 'Mark as sold'}
+                variant="secondary"
+                loading={setSold.isPending}
+                onPress={() =>
+                  setSold.mutate(
+                    { id: product.id, sold: !product.is_sold },
+                    {
+                      onError: (error) =>
+                        Alert.alert('Could not update the ad', (error as ApiError).message),
+                    },
+                  )
+                }
+                style={styles.ownerAction}
+              />
+              <Button
+                label="Delete ad"
+                variant="danger"
+                loading={deleteListing.isPending}
+                onPress={() =>
+                  Alert.alert(
+                    'Delete this ad?',
+                    'It will be removed from the shop and from your listings. This cannot be undone.',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'Delete',
+                        style: 'destructive',
+                        onPress: () =>
+                          deleteListing.mutate(product.id, {
+                            onSuccess: onBack,
+                            onError: (error) =>
+                              Alert.alert('Could not delete the ad', (error as ApiError).message),
+                          }),
+                      },
+                    ],
+                  )
+                }
+                style={styles.ownerAction}
+              />
+            </View>
+          </>
         ) : (
           <Button label="Message seller" onPress={() => onMessageSeller(product)} />
         )}
@@ -370,5 +427,13 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
     backgroundColor: colors.surface,
+  },
+  ownerActions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
+  ownerAction: { flex: 1 },
+  soldNote: {
+    ...typography.caption,
+    color: colors.amber,
+    textAlign: 'center',
+    marginBottom: spacing.md,
   },
 });

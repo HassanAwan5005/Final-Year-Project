@@ -39,6 +39,7 @@ def purchasable_products() -> QuerySet[DigitalProduct]:
         is_published=True,
         is_approved=True,
         is_deleted=False,
+        is_sold=False,
         seller__is_active=True,
         seller__is_blocked=False,
     ).filter(
@@ -103,7 +104,7 @@ def products_by_seller(user) -> QuerySet[DigitalProduct]:
 def seller_product(user, product_id) -> DigitalProduct | None:
     """One of the caller's own listings — anyone else's does not exist here."""
     return (
-        DigitalProduct.objects.filter(seller=user, pk=product_id)
+        DigitalProduct.objects.filter(seller=user, pk=product_id, is_deleted=False)
         .select_related("category")
         .first()
     )
@@ -260,7 +261,9 @@ def seller_sales_summary(user) -> dict:
     products = DigitalProduct.objects.filter(seller=user, is_deleted=False)
     return {
         "products_total": products.count(),
-        "products_live": products.filter(is_published=True, is_approved=True).count(),
+        "products_live": products.filter(
+            is_published=True, is_approved=True, is_sold=False
+        ).count(),
         "sales_count": agg["sales"] or 0,
         "gross_revenue": agg["revenue"] or Decimal("0.00"),
         "net_earnings": agg["earnings"] or Decimal("0.00"),

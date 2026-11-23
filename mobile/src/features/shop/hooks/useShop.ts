@@ -132,6 +132,34 @@ export function useUpdateListing() {
   });
 }
 
+/** The ad shows in the grid, its own page, My listings, Saved and chats. */
+function useRefreshAfterListingChange() {
+  const queryClient = useQueryClient();
+  return () => {
+    queryClient.invalidateQueries({ queryKey: qk.shop.all });
+    queryClient.invalidateQueries({ queryKey: qk.wishlist });
+    queryClient.invalidateQueries({ queryKey: qk.chat.all });
+  };
+}
+
+export function useSetListingSold() {
+  const refresh = useRefreshAfterListingChange();
+  return useMutation({
+    mutationFn: ({ id, sold }: { id: number; sold: boolean }) =>
+      shopApi.setListingSold(id, sold),
+    onSuccess: refresh,
+  });
+}
+
+export function useDeleteListing() {
+  const refresh = useRefreshAfterListingChange();
+  return useMutation({
+    mutationFn: (id: number) => shopApi.deleteListing(id),
+    onSuccess: refresh,
+    retry: false,
+  });
+}
+
 export function useCreateListing() {
   const queryClient = useQueryClient();
   return useMutation({
