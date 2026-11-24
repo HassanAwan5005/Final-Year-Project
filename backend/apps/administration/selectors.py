@@ -78,22 +78,6 @@ def get_topup(pk):
     return TopUpRequest.objects.select_related("user").filter(pk=pk).first()
 
 
-def product_queue(*, approved: bool = False):
-    """
-    Products awaiting the copyright gate.
-
-    `is_published=True, is_approved=False` is the real queue: a seller who has
-    not published yet has not asked for review.
-    """
-    from apps.marketplace.models import DigitalProduct
-
-    return (
-        DigitalProduct.objects.filter(is_published=True, is_approved=approved)
-        .select_related("seller", "seller__photographer_profile")
-        .order_by("created_at")
-    )
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # USERS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -178,11 +162,61 @@ def user_detail(user) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# BOOKINGS
+# ═══════════════════════════════════════════════════════════════════════════
+def bookings(*, status: str | None = None, term: str = ""):
+    """
+    Every booking on the platform, newest first — the admin's Bookings screen.
+
+    `term` matches a booking reference ("SNP-000123" or just "123") or the
+    email / name of either party.
+    """
+    import re
+
+    from apps.bookings.models import Booking
+
+    qs = Booking.objects.with_details()
+    if status:
+        qs = qs.filter(status=status.upper())
+    term = (term or "").strip()
+    if term:
+        match = Q(buyer__email__icontains=term) | Q(buyer__full_name__icontains=term)
+        match |= Q(photographer__user__email__icontains=term)
+        match |= Q(photographer__user__full_name__icontains=term)
+        digits = re.sub(r"^snp-?", "", term, flags=re.IGNORECASE)
+        if digits.isdigit():
+            match |= Q(pk=int(digits))
+        qs = qs.filter(match)
+    return qs.order_by("-created_at")
+
+
+def get_booking(pk):
+    """One booking with its status timeline, for any admin."""
+    from django.db.models import Prefetch
+
+    from apps.bookings.models import Booking, BookingStatusHistory
+
+    return (
+        Booking.objects.with_details()
+        .select_related("cancelled_by")
+        .prefetch_related(
+            Prefetch(
+                "status_history",
+                queryset=BookingStatusHistory.objects.select_related(
+                    "changed_by"
+                ).order_by("created_at"),
+            )
+        )
+        .filter(pk=pk)
+        .first()
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # DASHBOARD
 # ═══════════════════════════════════════════════════════════════════════════
 def queue_counts() -> dict:
-    """Everything waiting for an admin, in four indexed COUNTs."""
-    from apps.marketplace.models import DigitalProduct
+    """Everything waiting for an admin, in three indexed COUNTs."""
     from apps.profiles.models import TopUpRequest, TopUpStatus
 
     return {
@@ -194,9 +228,6 @@ def queue_counts() -> dict:
         ).count(),
         "pending_topups": TopUpRequest.objects.filter(
             status=TopUpStatus.PENDING
-        ).count(),
-        "products_awaiting_review": DigitalProduct.objects.filter(
-            is_published=True, is_approved=False
         ).count(),
     }
 

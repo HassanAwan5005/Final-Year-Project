@@ -25,9 +25,11 @@ import { ProductThumb } from '../components/ProductThumb';
 import {
   useDeleteListing,
   useProduct,
+  useReportProduct,
   useSetListingSold,
   useToggleWishlist,
 } from '../hooks/useShop';
+import type { FlagReason } from '../../../types/models';
 
 /**
  * A product page.
@@ -51,6 +53,7 @@ export function ProductDetailScreen({
   const toggleSave = useToggleWishlist();
   const setSold = useSetListingSold();
   const deleteListing = useDeleteListing();
+  const reportAd = useReportProduct();
   const userId = useAuthStore((s) => s.user?.id);
   const [viewing, setViewing] = useState<number | null>(null);
 
@@ -67,6 +70,23 @@ export function ProductDetailScreen({
   const product = query.data;
 
   const isMine = product.seller.id === userId;
+
+  // Android shows at most three Alert buttons, so two reasons + Cancel.
+  const sendReport = (reason: FlagReason) =>
+    reportAd.mutate(
+      { slug: product.slug, reason },
+      {
+        onSuccess: () => Alert.alert('Reported', 'Thanks — our team will review this ad.'),
+        onError: (error) => Alert.alert('Could not report', (error as ApiError).message),
+      },
+    );
+  const confirmReport = () =>
+    Alert.alert('Report this ad?', 'Our team will review it. Reporting does not remove the ad by itself.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Inappropriate', onPress: () => sendReport('INAPPROPRIATE') },
+      { text: 'Fake or misleading', style: 'destructive', onPress: () => sendReport('FAKE') },
+    ]);
+
   const photos = product.preview_image_urls.length
     ? product.preview_image_urls
     : product.thumbnail_url
@@ -79,17 +99,29 @@ export function ProductDetailScreen({
         <Pressable onPress={onBack} hitSlop={12} accessibilityLabel="Go back">
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </Pressable>
-        <Pressable
-          onPress={() => toggleSave.mutate({ product: product.id })}
-          hitSlop={12}
-          accessibilityLabel={product.is_wishlisted ? 'Remove from saved' : 'Save'}
-        >
-          <Ionicons
-            name={product.is_wishlisted ? 'heart' : 'heart-outline'}
-            size={22}
-            color={product.is_wishlisted ? colors.red : colors.text}
-          />
-        </Pressable>
+        <View style={styles.headerActions}>
+          {!isMine ? (
+            <Pressable
+              onPress={confirmReport}
+              disabled={reportAd.isPending}
+              hitSlop={12}
+              accessibilityLabel="Report this ad"
+            >
+              <Ionicons name="flag-outline" size={21} color={colors.text} />
+            </Pressable>
+          ) : null}
+          <Pressable
+            onPress={() => toggleSave.mutate({ product: product.id })}
+            hitSlop={12}
+            accessibilityLabel={product.is_wishlisted ? 'Remove from saved' : 'Save'}
+          >
+            <Ionicons
+              name={product.is_wishlisted ? 'heart' : 'heart-outline'}
+              size={22}
+              color={product.is_wishlisted ? colors.red : colors.text}
+            />
+          </Pressable>
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -335,6 +367,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
     paddingVertical: spacing.md,
   },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.xl },
   content: { paddingBottom: spacing.huge },
   hero: { backgroundColor: colors.surface },
   heroImage: { width: '100%', height: '100%', borderRadius: 0 },

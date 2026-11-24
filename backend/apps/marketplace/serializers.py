@@ -15,6 +15,7 @@ from decimal import Decimal
 from django.core.files.storage import default_storage
 from rest_framework import serializers
 
+from apps.administration.models import FlagReason
 from apps.catalog.serializers import CategoryMiniSerializer
 from apps.marketplace.models import (
     DigitalProduct,
@@ -307,3 +308,10 @@ class SellerSummarySerializer(serializers.Serializer):
     net_earnings = serializers.DecimalField(
         max_digits=14, decimal_places=2, read_only=True
     )
+
+
+class ReportProductSerializer(serializers.Serializer):
+    """A buyer reporting an ad. Same reasons as every other report."""
+
+    reason = serializers.ChoiceField(choices=FlagReason.choices)
+    detail = serializers.CharField(max_length=1000, required=False, allow_blank=True)

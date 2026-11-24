@@ -65,7 +65,7 @@ def open_flag(buyer, completed_booking):
     "path",
     [
         "dashboard/", "approvals/", "flags/", "users/", "topups/",
-        "products/", "audit/", "settings/", "broadcasts/",
+        "bookings/", "audit/", "settings/", "broadcasts/",
     ],
 )
 def test_a_photographer_is_refused_everywhere(photographer_client, path):
@@ -515,38 +515,18 @@ def test_duplicate_reports_from_one_person_collapse(buyer, completed_booking):
 # ═══════════════════════════════════════════════════════════════════════════
 # PRODUCTS
 # ═══════════════════════════════════════════════════════════════════════════
-def test_approving_a_product_lists_it_and_notifies_the_seller(
-    admin_client_authed, product, photographer
-):
-    from apps.notifications.models import Notification, NotificationType
-
-    product.is_approved = False
-    product.save(update_fields=["is_approved"])
-
-    response = admin_client_authed.post(f"{URL}products/{product.pk}/approve/")
-    product.refresh_from_db()
-
-    assert response.status_code == 200
-    assert product.is_approved is True
-    assert Notification.objects.filter(
-        recipient=photographer.user,
-        notification_type=NotificationType.PRODUCT_APPROVED,
-    ).exists()
-
-
-def test_removing_a_product_keeps_purchase_history(
-    admin_client_authed, paid_order_item, product
-):
+def test_removing_a_product_keeps_purchase_history(admin_user, paid_order_item, product):
     """
     A pulled listing must not revoke a licence somebody paid for.
 
     `OrderItem.product` is PROTECT, so the row survives; `is_approved=False`
-    only takes it out of the shop.
+    only takes it out of the shop. (Reached from the Reports tab: actioning a
+    reported ad calls this service.)
     """
-    admin_client_authed.post(
-        f"{URL}products/{product.pk}/remove/",
-        {"reason": "Copyright complaint received from the original photographer."},
-        format="json",
+    services.unpublish_product(
+        product.pk,
+        admin_user,
+        reason="Copyright complaint received from the original photographer.",
     )
     product.refresh_from_db()
     paid_order_item.refresh_from_db()
@@ -554,17 +534,6 @@ def test_removing_a_product_keeps_purchase_history(
     assert product.is_approved is False
     assert paid_order_item.product_id == product.pk
     assert AuditLog.objects.filter(action=AuditAction.PRODUCT_REMOVED).exists()
-
-
-def test_the_product_queue_is_published_but_unapproved(
-    admin_client_authed, product, second_product
-):
-    product.is_approved = False
-    product.save(update_fields=["is_approved"])
-
-    rows = admin_client_authed.get(URL + "products/").json()["data"]
-
-    assert [row["id"] for row in rows] == [product.pk]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -832,7 +801,6 @@ def test_queue_counts_are_zero_on_a_clean_platform():
         "pending_approvals": 0,
         "open_flags": 0,
         "pending_topups": 0,
-        "products_awaiting_review": 0,
     }
 
 
@@ -842,34 +810,3 @@ def test_platform_totals_count_completed_bookings_only(completed_booking, bookin
     assert totals["bookings_completed"] == 1
     # GMV counts completed shoots only — accepted work has not been earned yet.
     assert Decimal(totals["booking_gmv"]) == completed_booking.total_price
-
-
-def test_rejecting_a_pending_listing_takes_it_out_of_the_queue(
-    admin_client_authed, product
-):
-    product.is_approved = False
-    product.save(update_fields=["is_approved"])
-
-    response = admin_client_authed.post(
-        f"{URL}products/{product.pk}/remove/",
-        {"reason": "Photos do not show the actual product."},
-        format="json",
-    )
-
-    assert response.status_code == 200
-    product.refresh_from_db()
-    assert product.is_published is False
-    assert product.is_approved is False
-    queue = admin_client_authed.get(f"{URL}products/").json()["data"]
-    assert product.pk not in {row["id"] for row in queue}
-
-
-def test_the_product_queue_carries_photos_and_description(admin_client_authed, product):
-    product.is_approved = False
-    product.save(update_fields=["is_approved"])
-
-    row = admin_client_authed.get(f"{URL}products/").json()["data"][0]
-
-    assert row["description"] == product.description
-    assert "thumbnail_url" in row
-    assert isinstance(row["preview_image_urls"], list)

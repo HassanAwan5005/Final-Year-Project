@@ -1112,21 +1112,177 @@ export interface PortfolioImage {
   created_at: string;
 }
 
-/** A product in the admin moderation queue (mirrors AdminProductSerializer). */
-export interface AdminListing {
+// ═══════════════════════════════════════════════════════════════════════════
+// ADMIN SCREENS (Dashboard · Users · Reports · Bookings · Audit/Settings/Broadcasts)
+// Shapes mirror backend/apps/administration/serializers.py.
+// ═══════════════════════════════════════════════════════════════════════════
+export interface AdminDashboard {
+  queues: {
+    pending_approvals: number;
+    open_flags: number;
+    pending_topups: number;
+  };
+  totals: {
+    users: number;
+    buyers: number;
+    photographers: number;
+    blocked_users: number;
+    bookings_total: number;
+    bookings_pending: number;
+    bookings_accepted: number;
+    bookings_completed: number;
+    booking_gmv: string;
+    orders_paid: number;
+    shop_revenue: string;
+  };
+  trend: {
+    date: string;
+    new_users: number;
+    bookings_created: number;
+    bookings_completed: number;
+    gross_booking_value: string;
+    platform_commission: string;
+    reviews_posted: number;
+  }[];
+  window_days: number;
+}
+
+export type AdminUserRole = 'BUYER' | 'PHOTOGRAPHER' | 'ADMIN';
+
+export interface AdminUser {
+  id: number;
+  email: string;
+  full_name: string;
+  phone: string;
+  role: AdminUserRole;
+  city: string;
+  is_active: boolean;
+  is_blocked: boolean;
+  blocked_reason: string;
+  is_email_verified: boolean;
+  joined_at: string;
+  last_login: string | null;
+  is_approved_photographer: boolean | null;
+}
+
+export interface AdminUserDetail extends AdminUser {
+  stats: {
+    bookings_made: number;
+    bookings_completed: number;
+    bookings_cancelled: number;
+    total_spent: string;
+    bookings_received: number;
+    shoots_delivered: number;
+    orders: number;
+    reviews_written: number;
+    wallet_balance: string;
+  };
+}
+
+export type FlagStatus = 'OPEN' | 'REVIEWING' | 'ACTIONED' | 'DISMISSED';
+export type FlagContentType = 'REVIEW' | 'MESSAGE' | 'PRODUCT' | 'PORTFOLIO_IMAGE' | 'PROFILE';
+
+export interface ModerationFlag {
+  id: number;
+  content_type: FlagContentType;
+  object_id: number;
+  reason: FlagReason;
+  detail: string;
+  status: FlagStatus;
+  reporter_name: string | null;
+  resolved_by_name: string | null;
+  resolution_note: string;
+  resolved_at: string | null;
+  target_preview: string;
+  created_at: string;
+}
+
+export interface AdminBooking {
+  id: number;
+  reference: string;
+  status: BookingStatus;
+  status_label: string;
+  service_title: string;
+  category: string;
+  buyer_id: number;
+  buyer_name: string;
+  buyer_email: string;
+  photographer_user_id: number;
+  photographer_name: string;
+  photographer_email: string;
+  event_date: string;
+  start_time: string;
+  duration_hours: number;
+  location_city: string;
+  total_price: string;
+  created_at: string;
+  can_force_cancel: boolean;
+}
+
+export interface AdminBookingDetail extends AdminBooking {
+  location_address: string;
+  notes: string;
+  special_requirements: string;
+  unit_price: string;
+  travel_fee: string;
+  discount: string;
+  commission_amount: string;
+  photographer_payout: string;
+  rejection_reason: string;
+  cancellation_reason: string;
+  cancellation_note: string;
+  cancelled_by_name: string | null;
+  has_review: boolean;
+  history: {
+    from_status: string;
+    to_status: string;
+    actor_role: string;
+    changed_by_name: string;
+    note: string;
+    created_at: string;
+  }[];
+}
+
+export interface AuditEntry {
+  id: number;
+  action: string;
+  actor_name: string;
+  target_type: string;
+  target_id: number | null;
+  target_label: string;
+  changes: Record<string, unknown>;
+  reason: string;
+  ip_address: string | null;
+  request_id: string;
+  created_at: string;
+}
+
+export interface PlatformSetting {
+  id: number;
+  key: string;
+  value: string;
+  typed_value: unknown;
+  value_type: 'STRING' | 'INT' | 'FLOAT' | 'BOOL' | 'JSON';
+  label: string;
+  description: string;
+  group: string;
+  is_public: boolean;
+  updated_by_name: string | null;
+  updated_at: string;
+}
+
+export type BroadcastAudience = 'ALL' | 'BUYERS' | 'PHOTOGRAPHERS' | 'CITY';
+
+export interface Broadcast {
   id: number;
   title: string;
-  slug: string;
-  product_type: string;
-  type_label: string;
-  price: string;
-  seller_name: string;
-  description: string;
-  address: string;
-  thumbnail_url: string | null;
-  preview_image_urls: string[];
-  is_published: boolean;
-  is_approved: boolean;
-  file_count: number;
+  body: string;
+  audience: BroadcastAudience;
+  city_filter: string;
+  send_push: boolean;
+  send_email: boolean;
+  scheduled_for: string | null;
+  sent_at: string | null;
+  recipient_count: number;
   created_at: string;
 }

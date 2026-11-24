@@ -39,6 +39,7 @@ from apps.marketplace.serializers import (
     OrderSerializer,
     ProductDetailSerializer,
     ProductListSerializer,
+    ReportProductSerializer,
     SellerProductCreateSerializer,
     SellerProductDetailSerializer,
     SellerProductSerializer,
@@ -69,6 +70,7 @@ class ProductViewSet(MessageResponseMixin, MultiSerializerMixin, ReadOnlyModelVi
         "featured": "Featured products retrieved",
         "bestsellers": "Best sellers retrieved",
         "filters": "Filter options retrieved",
+        "report": "Thanks — our team will review this ad",
     }
 
     def get_queryset(self):
@@ -146,6 +148,22 @@ class ProductViewSet(MessageResponseMixin, MultiSerializerMixin, ReadOnlyModelVi
             view_count=F("view_count") + 1
         )
         return Response(self.get_serializer(product).data)
+
+    @extend_schema(summary="Report an ad to the admins", request=ReportProductSerializer)
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
+    def report(self, request, slug=None):
+        product = selectors.product_detail(slug, request.user)
+        if product is None:
+            raise NotFound("This product is not available.")
+        serializer = ReportProductSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        flag = services.report_product(
+            product,
+            request.user,
+            reason=serializer.validated_data["reason"],
+            detail=serializer.validated_data.get("detail", ""),
+        )
+        return Response({"flag_id": flag.pk, "status": flag.status})
 
     @extend_schema(summary="Editorially featured products")
     @action(detail=False, methods=["get"], pagination_class=None)

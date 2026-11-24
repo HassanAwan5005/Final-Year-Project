@@ -14,6 +14,7 @@ import type {
   DigitalProduct,
   DigitalProductDetail,
   DownloadTicket,
+  FlagReason,
   Order,
   OrderItem,
   PhotographerSelfProfile,
@@ -104,6 +105,13 @@ export const shopApi = {
   requestDownload(itemId: number, fileId?: number) {
     return unwrap<DownloadTicket>(
       api.post(ENDPOINTS.marketplace.download(itemId), fileId ? { file: fileId } : {}),
+    );
+  },
+
+  /** Report someone else's ad to the admins (it lands in their Reports tab). */
+  reportProduct(slug: string, reason: FlagReason, detail = '') {
+    return unwrap<{ flag_id: number; status: string }>(
+      api.post(ENDPOINTS.marketplace.reportProduct(slug), { reason, detail }),
     );
   },
 

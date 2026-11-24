@@ -517,50 +517,6 @@ def unhide_review(review_id: int, admin_user, *, reason: str = "", request=None)
 
 
 @transaction.atomic
-def approve_product(product_id: int, admin_user, *, note: str = "", request=None):
-    """
-    Clear a product for sale.
-
-    `is_approved` is the copyright gate: an unapproved product is invisible in
-    the shop no matter what its seller sets `is_published` to.
-    """
-    from apps.marketplace.models import DigitalProduct
-
-    product = DigitalProduct.objects.filter(pk=product_id).first()
-    if product is None:
-        raise BusinessRuleViolation("Product not found.")
-    if product.is_approved:
-        raise ConflictError("This product is already approved.")
-
-    product.is_approved = True
-    product.save(update_fields=["is_approved", "updated_at"])
-
-    _audit(
-        admin_user,
-        AuditAction.PRODUCT_APPROVED,
-        target_type="DigitalProduct",
-        target_id=product.pk,
-        target_label=product.title,
-        changes={"is_approved": [False, True]},
-        reason=note,
-        request=request,
-    )
-
-    from apps.notifications.models import NotificationType
-    from apps.notifications.services import notify
-
-    notify(
-        product.seller,
-        NotificationType.PRODUCT_APPROVED,
-        title=f"“{product.title}” is approved",
-        body="It is now listed in the shop.",
-        action_screen="ProductDetail",
-        action_id=product.slug,
-    )
-    return product
-
-
-@transaction.atomic
 def unpublish_product(product_id: int, admin_user, *, reason: str = "", request=None):
     """
     Pull a product from sale without destroying purchase history.

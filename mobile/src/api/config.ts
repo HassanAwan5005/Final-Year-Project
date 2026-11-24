@@ -152,6 +152,8 @@ export const ENDPOINTS = {
     sellerProductMarkAvailable: (id: number) =>
       `/marketplace/seller/products/${id}/mark-available/`,
     sellerSummary: '/marketplace/seller/products/summary/',
+    /** Report an ad to the admins (lands in the moderation queue). */
+    reportProduct: (slug: string) => `/marketplace/products/${slug}/report/`,
   },
   profiles: {
     me: '/profiles/me/',
@@ -220,9 +222,21 @@ export const ENDPOINTS = {
   publicSettings: '/admin/settings/public/',
   /** Admin-only moderation (the server enforces the ADMIN role). */
   admin: {
-    products: '/admin/products/',
-    approveProduct: (id: number | string) => `/admin/products/${id}/approve/`,
-    removeProduct: (id: number | string) => `/admin/products/${id}/remove/`,
+    dashboard: '/admin/dashboard/',
+    users: '/admin/users/',
+    user: (id: number | string) => `/admin/users/${id}/`,
+    blockUser: (id: number | string) => `/admin/users/${id}/block/`,
+    unblockUser: (id: number | string) => `/admin/users/${id}/unblock/`,
+    flags: '/admin/flags/',
+    claimFlag: (id: number | string) => `/admin/flags/${id}/claim/`,
+    resolveFlag: (id: number | string) => `/admin/flags/${id}/resolve/`,
+    bookings: '/admin/bookings/',
+    booking: (id: number | string) => `/admin/bookings/${id}/`,
+    forceCancelBooking: (id: number | string) => `/admin/bookings/${id}/force-cancel/`,
+    audit: '/admin/audit/',
+    settings: '/admin/settings/',
+    setting: (key: string) => `/admin/settings/${encodeURIComponent(key)}/`,
+    broadcasts: '/admin/broadcasts/',
   },
   recommendations: '/recommendations/',
   matchmaker: '/recommendations/matchmaker/',

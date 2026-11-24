@@ -19,6 +19,7 @@ import {
   type ShopFilters,
   type UpdateListingPayload,
 } from '../../../api/services/shop.api';
+import type { FlagReason } from '../../../types/models';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // BROWSE
@@ -148,6 +149,14 @@ export function useSetListingSold() {
     mutationFn: ({ id, sold }: { id: number; sold: boolean }) =>
       shopApi.setListingSold(id, sold),
     onSuccess: refresh,
+  });
+}
+
+export function useReportProduct() {
+  return useMutation({
+    mutationFn: ({ slug, reason }: { slug: string; reason: FlagReason }) =>
+      shopApi.reportProduct(slug, reason),
+    retry: false,
   });
 }
 

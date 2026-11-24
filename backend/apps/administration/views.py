@@ -11,8 +11,7 @@ Administration endpoints — Module 14. Mounted at /api/v1/admin/.
     POST /admin/users/{id}/block|unblock|adjust-wallet/
     GET  /admin/topups/                         ?status=PENDING
     POST /admin/topups/{id}/approve|reject/
-    GET  /admin/products/                       the copyright queue
-    POST /admin/products/{id}/approve|remove/
+    GET  /admin/bookings/  ·  /admin/bookings/{id}/   ?status=&q=
     POST /admin/bookings/{id}/force-cancel/
     GET  /admin/audit/                          append-only, read-only
     GET  /admin/settings/  ·  PATCH /admin/settings/{key}/
@@ -45,8 +44,9 @@ from rest_framework.viewsets import GenericViewSet
 from apps.administration import selectors, services
 from apps.administration.models import ApprovalRequest, ModerationFlag, PlatformSetting
 from apps.administration.serializers import (
+    AdminBookingDetailSerializer,
+    AdminBookingSerializer,
     AdminDashboardSerializer,
-    AdminProductSerializer,
     AdminTopUpSerializer,
     AdminUserDetailSerializer,
     AdminUserSerializer,
@@ -468,78 +468,49 @@ class AdminTopUpViewSet(_AdminViewSet):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PRODUCTS
-# ═══════════════════════════════════════════════════════════════════════════
-@extend_schema(tags=["Admin"])
-class AdminProductViewSet(_AdminViewSet):
-    serializer_class = AdminProductSerializer
-    serializer_classes = {"remove": RejectionSerializer}
-    success_messages = {
-        "approve": "Product approved and listed",
-        "remove": "Product pulled from the shop",
-    }
-
-    def get_queryset(self):
-        from apps.marketplace.models import DigitalProduct
-
-        if getattr(self, "swagger_fake_view", False):
-            return DigitalProduct.objects.none()
-        return selectors.product_queue()
-
-    @extend_schema(
-        summary="Published products still awaiting the copyright gate",
-        parameters=[
-            OpenApiParameter(
-                "approved", bool, description="Show already-approved ones instead"
-            )
-        ],
-        responses=AdminProductSerializer(many=True),
-    )
-    def list(self, request):
-        approved = request.query_params.get("approved") in ("1", "true", "True")
-        return self._page(
-            selectors.product_queue(approved=approved), AdminProductSerializer
-        )
-
-    @extend_schema(summary="Clear a product for sale", request=None)
-    @action(detail=True, methods=["post"])
-    def approve(self, request, pk=None):
-        product = services.approve_product(int(pk), request.user, request=request)
-        return Response(
-            AdminProductSerializer(product, context=self.get_serializer_context()).data
-        )
-
-    @extend_schema(
-        summary="Pull a product — buyers keep what they already paid for",
-        request=RejectionSerializer,
-    )
-    @action(detail=True, methods=["post"])
-    def remove(self, request, pk=None):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        product = services.unpublish_product(
-            int(pk),
-            request.user,
-            reason=serializer.validated_data["reason"],
-            request=request,
-        )
-        return Response(
-            AdminProductSerializer(product, context=self.get_serializer_context()).data
-        )
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # BOOKINGS
 # ═══════════════════════════════════════════════════════════════════════════
 @extend_schema(tags=["Admin"])
 class AdminBookingViewSet(_AdminViewSet):
-    serializer_class = ForceCancelSerializer
+    serializer_class = AdminBookingSerializer
+    serializer_classes = {"force_cancel": ForceCancelSerializer}
     success_messages = {"force_cancel": "Booking cancelled and both parties notified"}
 
     def get_queryset(self):
         from apps.bookings.models import Booking
 
-        return Booking.objects.none()  # only the action below is exposed
+        if getattr(self, "swagger_fake_view", False):
+            return Booking.objects.none()
+        return selectors.bookings()
+
+    @extend_schema(
+        summary="Every booking on the platform, newest first",
+        parameters=[
+            OpenApiParameter(
+                "status", str,
+                description="PENDING | ACCEPTED | COMPLETED | REJECTED | CANCELLED | EXPIRED",
+            ),
+            OpenApiParameter("q", str, description="Reference, or either party's email / name"),
+        ],
+        responses=AdminBookingSerializer(many=True),
+    )
+    def list(self, request):
+        return self._page(
+            selectors.bookings(
+                status=request.query_params.get("status"),
+                term=request.query_params.get("q") or "",
+            ),
+            AdminBookingSerializer,
+        )
+
+    @extend_schema(summary="One booking with its timeline", responses=AdminBookingDetailSerializer)
+    def retrieve(self, request, pk=None):
+        booking = selectors.get_booking(pk) if str(pk).isdigit() else None
+        if booking is None:
+            raise NotFound("Booking not found.")
+        return Response(
+            AdminBookingDetailSerializer(booking, context=self.get_serializer_context()).data
+        )
 
     @extend_schema(
         summary="Force-cancel a booking through the state machine",

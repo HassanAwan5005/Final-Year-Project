@@ -300,3 +300,29 @@ def _delete_unused_photos(paths) -> None:
         ).exists()
         if not in_use:
             default_storage.delete(path)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# REPORTING AN AD
+# ═══════════════════════════════════════════════════════════════════════════
+def report_product(product: DigitalProduct, reporter, *, reason: str, detail: str = ""):
+    """
+    Feed a shop ad into the same moderation queue as reviews and messages.
+
+    Reporting does not hide the ad. An admin decides; resolving the report as
+    ACTIONED unpublishes it (`administration.services._apply_moderation`).
+    """
+    from apps.administration.services import report_content
+
+    if product.seller_id == reporter.id:
+        raise BusinessRuleViolation(
+            "This is your own ad — you can edit or delete it instead."
+        )
+
+    return report_content(
+        reporter=reporter,
+        content_type="PRODUCT",
+        object_id=product.pk,
+        reason=reason,
+        detail=detail,
+    )

@@ -123,6 +123,14 @@ export const qk = {
 
   admin: {
     all: ['admin'] as const,
-    pendingListings: ['admin', 'listings', 'pending'] as const,
+    dashboard: ['admin', 'dashboard'] as const,
+    users: (filters: object) => ['admin', 'users', filters] as const,
+    user: (id: number) => ['admin', 'user', id] as const,
+    flags: (filters: object) => ['admin', 'flags', filters] as const,
+    bookings: (filters: object) => ['admin', 'bookings', filters] as const,
+    booking: (id: number) => ['admin', 'booking', id] as const,
+    audit: (filters: object) => ['admin', 'audit', filters] as const,
+    settings: ['admin', 'settings'] as const,
+    broadcasts: ['admin', 'broadcasts'] as const,
   },
 } as const;

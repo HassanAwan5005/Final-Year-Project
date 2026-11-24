@@ -273,47 +273,73 @@ class TopUpRejectionSerializer(serializers.Serializer):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PRODUCTS
-# ═══════════════════════════════════════════════════════════════════════════
-class AdminProductSerializer(serializers.Serializer):
-    id = serializers.IntegerField()
-    title = serializers.CharField()
-    slug = serializers.CharField()
-    product_type = serializers.CharField()
-    price = serializers.DecimalField(max_digits=10, decimal_places=2)
-    seller_name = serializers.SerializerMethodField()
-    is_published = serializers.BooleanField()
-    is_approved = serializers.BooleanField()
-    file_count = serializers.IntegerField()
-    created_at = serializers.DateTimeField()
-    # What a moderator needs to judge a listing: its photos and description.
-    description = serializers.CharField()
-    address = serializers.CharField()
-    type_label = serializers.CharField(source="get_product_type_display")
-    thumbnail_url = serializers.SerializerMethodField()
-    preview_image_urls = serializers.SerializerMethodField()
-
-    def get_seller_name(self, obj) -> str:
-        from apps.marketplace.serializers import seller_display_name
-
-        return seller_display_name(obj.seller)
-
-    def get_thumbnail_url(self, obj) -> str | None:
-        if not obj.thumbnail:
-            return None
-        request = self.context.get("request")
-        url = obj.thumbnail.url
-        return request.build_absolute_uri(url) if request else url
-
-    def get_preview_image_urls(self, obj) -> list[str]:
-        from apps.marketplace.serializers import ProductDetailSerializer
-
-        return ProductDetailSerializer(context=self.context).get_preview_image_urls(obj)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # BOOKINGS
 # ═══════════════════════════════════════════════════════════════════════════
+class AdminBookingSerializer(serializers.Serializer):
+    """A row on the admin's Bookings screen."""
+
+    id = serializers.IntegerField()
+    reference = serializers.CharField()
+    status = serializers.CharField()
+    status_label = serializers.CharField(source="get_status_display")
+    service_title = serializers.CharField(source="service.title")
+    category = serializers.SerializerMethodField()
+    buyer_id = serializers.IntegerField()
+    buyer_name = serializers.CharField(source="buyer.full_name")
+    buyer_email = serializers.EmailField(source="buyer.email")
+    photographer_user_id = serializers.IntegerField(source="photographer.user_id")
+    photographer_name = serializers.CharField(source="photographer.display_name")
+    photographer_email = serializers.EmailField(source="photographer.user.email")
+    event_date = serializers.DateField()
+    start_time = serializers.TimeField()
+    duration_hours = serializers.IntegerField()
+    location_city = serializers.CharField()
+    total_price = serializers.DecimalField(max_digits=12, decimal_places=2)
+    created_at = serializers.DateTimeField()
+    can_force_cancel = serializers.SerializerMethodField()
+
+    def get_category(self, obj) -> str:
+        category = obj.service.category if obj.service_id else None
+        return category.name if category else ""
+
+    def get_can_force_cancel(self, obj) -> bool:
+        from apps.bookings.constants import BLOCKING_STATUSES
+
+        return obj.status in BLOCKING_STATUSES
+
+
+class AdminBookingHistorySerializer(serializers.Serializer):
+    from_status = serializers.CharField()
+    to_status = serializers.CharField()
+    actor_role = serializers.CharField()
+    changed_by_name = serializers.SerializerMethodField()
+    note = serializers.CharField()
+    created_at = serializers.DateTimeField()
+
+    def get_changed_by_name(self, obj) -> str:
+        return obj.changed_by.full_name if obj.changed_by_id else "System"
+
+
+class AdminBookingDetailSerializer(AdminBookingSerializer):
+    location_address = serializers.CharField()
+    notes = serializers.CharField()
+    special_requirements = serializers.CharField()
+    unit_price = serializers.DecimalField(max_digits=12, decimal_places=2)
+    travel_fee = serializers.DecimalField(max_digits=12, decimal_places=2)
+    discount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    commission_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    photographer_payout = serializers.DecimalField(max_digits=12, decimal_places=2)
+    rejection_reason = serializers.CharField()
+    cancellation_reason = serializers.CharField()
+    cancellation_note = serializers.CharField()
+    cancelled_by_name = serializers.SerializerMethodField()
+    has_review = serializers.BooleanField()
+    history = AdminBookingHistorySerializer(source="status_history", many=True)
+
+    def get_cancelled_by_name(self, obj) -> str | None:
+        return obj.cancelled_by.full_name if obj.cancelled_by_id else None
+
+
 class ForceCancelSerializer(serializers.Serializer):
     reason = serializers.CharField(max_length=1000)
 
@@ -405,7 +431,6 @@ class QueueCountSerializer(serializers.Serializer):
     pending_approvals = serializers.IntegerField()
     open_flags = serializers.IntegerField()
     pending_topups = serializers.IntegerField()
-    products_awaiting_review = serializers.IntegerField()
 
 
 class PlatformTotalsSerializer(serializers.Serializer):
