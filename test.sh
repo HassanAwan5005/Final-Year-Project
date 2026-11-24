@@ -746,6 +746,28 @@ check "moderation queue serves"      "True" "$(curl -s "$API/admin/flags/" -H "$
 check "top-up queue serves"          "True" "$(curl -s "$API/admin/topups/" -H "$ADMIN_AUTH" | jget "d['success']")"
 check "audit log serves"             "True" "$(curl -s "$API/admin/audit/" -H "$ADMIN_AUTH" | jget "d['success']")"
 
+# The admin app's Bookings tab: list, filter, search by reference, detail.
+A_BOOKINGS=$(curl -s "$API/admin/bookings/?page_size=5" -H "$ADMIN_AUTH")
+check "admin bookings list serves"   "True" "$(echo "$A_BOOKINGS" | jget "d['success'] and len(d['data']) > 0")"
+A_BK_ID=$(echo "$A_BOOKINGS" | jget "d['data'][0]['id']")
+A_BK_REF=$(echo "$A_BOOKINGS" | jget "d['data'][0]['reference']")
+check "bookings filter by status"    "True" "$(curl -s "$API/admin/bookings/?status=PENDING&page_size=5" -H "$ADMIN_AUTH" \
+  | jget "all(r['status'] == 'PENDING' for r in d['data'])")"
+check "booking search by reference"  "$A_BK_ID" "$(curl -s "$API/admin/bookings/?q=$A_BK_REF" -H "$ADMIN_AUTH" | jget "d['data'][0]['id']")"
+check "booking detail has timeline"  "True" "$(curl -s "$API/admin/bookings/$A_BK_ID/" -H "$ADMIN_AUTH" | jget "isinstance(d['data']['history'], list)")"
+check "buyer refused admin bookings" "403" "$(curl -s -o /dev/null -w "%{http_code}" "$API/admin/bookings/" -H "$REV_BUYER_AUTH")"
+
+# Ads go live without approval: the old approval queue no longer exists.
+check "ad approval queue removed"    "404" "$(curl -s -o /dev/null -w "%{http_code}" "$API/admin/products/" -H "$ADMIN_AUTH")"
+
+# Reporting an ad (validation only — a real report is covered by pytest).
+A_AD_SLUG=$(curl -s "$API/marketplace/products/?page_size=1" | jget "d['data'][0]['slug']")
+check "ad report needs login"        "401" "$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+  "$API/marketplace/products/$A_AD_SLUG/report/" -H "Content-Type: application/json" -d '{"reason":"SPAM"}')"
+check "ad report rejects bad reason" "400" "$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+  "$API/marketplace/products/$A_AD_SLUG/report/" -H "$REV_BUYER_AUTH" \
+  -H "Content-Type: application/json" -d '{"reason":"BORING"}')"
+
 # The audit log has no write path at all — not a permission, an absence.
 check "audit rejects POST"           "405" "$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/admin/audit/" \
   -H "$ADMIN_AUTH" -H "Content-Type: application/json" -d '{}')"

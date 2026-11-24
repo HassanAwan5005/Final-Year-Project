@@ -468,7 +468,7 @@ With the server running:
 ./test.sh
 ```
 
-Exercises the live API the way the app does (147 checks): registration, login,
+Exercises the live API the way the app does (155 checks): registration, login,
 the JWT kill switch, blocked accounts, the database-level double-booking guard,
 the full booking lifecycle, the shop and profile, the photographer studio,
 analytics, reviews, notifications, chat, administration, and the docs
@@ -496,12 +496,12 @@ recommendation engine's learned components. From the project root:
 
 ```bash
 backend/.venv/bin/python -m ml.pipelines.ingest --audit   # data-quality report
-backend/.venv/bin/python -m ml.train                      # train all three models
+backend/.venv/bin/python -m ml.train                      # train all models
 backend/.venv/bin/python -m ml.train --only sentiment     # just one
 ```
 
-The API serves recommendations without them — the ranker is a transparent
-weighted scorer by design.
+The API still serves recommendations without them: if a model file is
+missing, the engine falls back to popularity ranking instead of failing.
 
 ## C5. Typecheck the frontend
 
@@ -559,7 +559,7 @@ the database.
 | "Near me" says no photographers within 300 km | The phone or emulator is not in Pakistan. Set a Pakistani location (Step B6). |
 | "Near me" asks to allow location access | Location permission was denied. Turn it on for Expo Go in the phone's settings. |
 | Prices, sold ads or "Post ad" behave like before | Migrations were not run after pulling. Run `manage.py migrate` (Step C6). |
-| Admin's "Pending listings" is always empty | Expected — ads go live without approval. Admins can still remove an ad. |
+| Admin wants to take down an ad | Ads go live without approval. A reported ad appears in the admin's **Reports** tab, where "Remove ad" takes it out of the shop. |
 
 ---
 

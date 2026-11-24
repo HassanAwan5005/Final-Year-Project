@@ -1,9 +1,36 @@
 # MODULE 1 — OVERALL SYSTEM ARCHITECTURE
 ### SnapSphere — Photographer Booking & Recommendation Platform
 
-**Document version:** 1.0
+**Document version:** 1.1 — baseline design + "as built" notes (24 November 2026)
 **Author role:** Senior Software Architect
-**Status:** Baseline — approved before Module 2 (Database Design)
+**Status:** Baseline — approved before Module 2 (Database Design). The design
+below is kept as written; where the delivered system differs, §0.5 and the
+**As built** notes say so.
+
+---
+
+## 0.5 AS BUILT — HOW THE DELIVERED SYSTEM DIFFERS (24 Nov 2026)
+
+Read this before quoting any section below. The design was the plan; this is
+what the code does now.
+
+| Area | Design said | As built |
+|---|---|---|
+| **Clients** | Mobile app (buyer + photographer) + separate React/Vite **admin web dashboard** with Recharts | **One mobile app for all three roles.** Admins sign in on the normal login screen and get five tabs: Dashboard, Users, Reports, Bookings, More (audit log, platform settings, broadcasts). No `admin-web/` folder exists. Django admin (`/django-admin/`) is the developer back office. A separate web dashboard is future work. |
+| **Charts** | `react-native-gifted-charts` (mobile), Recharts (admin web) | **No chart library.** Bars are plain Views (keeps the Expo SDK pin safe). |
+| **Marketplace** | Digital products (presets, LUTs, templates) bought with a wallet, instant secure downloads | **OLX-style classifieds for camera and mobile gear.** Anyone can post an ad; it is live at once (no approval). Sellers edit, mark sold or delete; buyers report an ad or message the seller and settle off-platform. **No cart, checkout or in-app payment.** |
+| **Wallet / top-ups** | Wallet with admin-verified bank-transfer top-ups | **Built in the backend but not shown in the app** (no screens). Kept because other code depends on it. |
+| **Orders / downloads** | Wallet purchase unlocks single-use download tokens | **Kept only for orders placed before checkout was removed**; the app creates no new orders. Product reviews depend on them. |
+| **Photographer approval** | Admin approves a photographer before listing | **Approval-request flow exists in the backend but is unused**: `is_approved` defaults to true, so new photographers are listed automatically. |
+| **Ad approval** | Admin approves each product (copyright gate) | **Removed.** Moderation is after the fact via user reports (Reports tab → "Remove ad"). |
+| **Revenue model** | Commission on bookings and on product sales | Booking commission and payout are **calculated and shown; no money is collected** (no payment gateway). No product commission. |
+| **Ranking model** | Learning-to-rank on dataset features | Trained on the **database booking history** (RandomForest, temporal hold-out). The source CSV had no signal. On seeded data the score is optimistic — see README "Model results". |
+| **Matchmaker / visual search** | (F-05 planned CLIP image search) | Matchmaker is a **rule-based** parser; visual search uses **hand-crafted image features** + cosine similarity. No LLM or neural network. |
+| **Push notifications** | Push for key events | In-app notifications and the live bell work; **push delivery is a log line** (no Expo/FCM credentials). Email uses the console backend in development. |
+| **Platform settings** | Runtime-tunable from the admin | Stored, editable and audited, but **the server reads its values from `config/settings/base.py`**, not from these rows. |
+| **Expo SDK** | SDK 51 | **SDK 58** (React Native 0.88, React 19.3). |
+| **Featured photographers** | Featured badge / section | **Removed** from the app. (Featured *portfolio photos*, up to 12 per photographer, are live.) |
+| **Docker** | `docker-compose.yml`, MySQL in Docker | Local MySQL and Redis started by `start.sh`; no Docker files in the repo. |
 
 ---
 
@@ -61,8 +88,8 @@ Only 5 unique review texts exist across 300 rows. A model trained on this learns
 
 | Conflict | Resolution | Why |
 |---|---|---|
-| Proposal says *"Excludes: full online payment integration"* — but your feature list requires *"Buy digital products / Download purchased products"* | **Hybrid.** Bookings = offline payment (cash/bank transfer + admin verification). Digital products = **Wallet + manual top-up**: buyer uploads bank-transfer receipt → admin credits wallet → wallet purchases are instant and auto-unlock downloads | Keeps proposal scope honest, still gives a working end-to-end marketplace with instant download. Real gateway = documented future enhancement |
-| Proposal names **Recharts** — a *web* library that does not run in React Native | **Two clients.** Mobile app uses `react-native-gifted-charts`. **Admin gets a separate React web dashboard using Recharts** | Matches proposal literally, and admin analytics genuinely need a big screen |
+| Proposal says *"Excludes: full online payment integration"* — but your feature list requires *"Buy digital products / Download purchased products"* | **Hybrid.** Bookings = offline payment (cash/bank transfer + admin verification). Digital products = **Wallet + manual top-up**: buyer uploads bank-transfer receipt → admin credits wallet → wallet purchases are instant and auto-unlock downloads | Keeps proposal scope honest, still gives a working end-to-end marketplace with instant download. Real gateway = documented future enhancement. **As built:** the shop became gear classifieds with no in-app payment; wallet and downloads are kept in the backend but not shown (§0.5) |
+| Proposal names **Recharts** — a *web* library that does not run in React Native | **Two clients.** Mobile app uses `react-native-gifted-charts`. **Admin gets a separate React web dashboard using Recharts** | Matches proposal literally, and admin analytics genuinely need a big screen. **As built:** no web dashboard and no chart library — admin is five tabs in the mobile app, charts are plain Views (§0.5) |
 | Proposal has a **Location-Based Matching module**; your feature list only says "Distance filter" | Folded into Search & Filter (Module 11) as first-class: lat/lng on every profile + Haversine bounding-box query + map screen | Nothing from the proposal is dropped |
 | Proposal says backend "Django/Flask" | **Django REST Framework**, per your stated stack | DRF gives auth, permissions, serialization, admin, ORM out of the box |
 
@@ -76,10 +103,10 @@ Only 5 unique review texts exist across 300 rows. A model trained on this learns
 | **One-liner** | A mobile marketplace where buyers discover, compare and book professional photographers, guided by an AI recommendation engine |
 | **Primary market** | Pakistan (Islamabad, Lahore, Karachi, Rawalpindi, Faisalabad, Multan, Peshawar) |
 | **Currency** | PKR (`Rs`) |
-| **Clients** | React Native mobile app (Buyer + Photographer) · React web dashboard (Admin) |
+| **Clients** | React Native mobile app (Buyer + Photographer) · React web dashboard (Admin) — *as built: one mobile app for all three roles (§0.5)* |
 | **Roles** | Buyer · Photographer · Admin |
-| **Revenue model** | Platform commission on bookings + commission on digital product sales |
-| **Payments** | Offline (bookings) · Wallet with admin-verified top-up (digital products) |
+| **Revenue model** | Platform commission on bookings + commission on digital product sales — *as built: booking commission is calculated and shown only (§0.5)* |
+| **Payments** | Offline (bookings) · Wallet with admin-verified top-up (digital products) — *as built: no in-app payment; shop deals settle off-platform (§0.5)* |
 
 ---
 
@@ -159,13 +186,15 @@ One Redis instance, three logical databases (`/0` cache, `/1` celery, `/2` chann
 ╔════════════════════════════════════════════════════════════════════════════╗
 ║                            CLIENT TIER                                     ║
 ╠═══════════════════════════╦═══════════════════╦════════════════════════════╣
-║  React Native (Expo)      ║  React Native     ║  React + Vite (Web)        ║
+║  React Native (Expo)      ║  React Native     ║  React + Vite (Web) *      ║
 ║  ── BUYER APP ──          ║  ── PHOTOGRAPHER ─║  ── ADMIN DASHBOARD ──     ║
 ║  Explore · Search         ║  Portfolio Mgr    ║  User Mgmt · Approvals     ║
 ║  Booking · Wishlist       ║  Services/Pricing ║  Booking Oversight         ║
 ║  Marketplace · Chat       ║  Calendar         ║  Reports · Recharts        ║
 ║  Reviews · Notifications  ║  Earnings/Analytics║ Categories · Moderation   ║
 ╚═══════════╦═══════════════╩═════════╦═════════╩═══════════╦════════════════╝
+  * As built: the admin column is five tabs inside the same React Native app,
+    not a web client (§0.5).
             │ HTTPS/JSON              │ WSS                 │ HTTPS/JSON
             │ Bearer <access_jwt>     │ ?token=<jwt>        │
             ▼                         ▼                     ▼
@@ -280,11 +309,11 @@ A single violation of this rule is where 90% of "why is my Django project unmain
 
 | Package | Purpose | Why |
 |---|---|---|
-| Expo SDK 51 | Toolchain | No Xcode/Android Studio needed for FYP demo |
+| Expo SDK 51 (*as built: SDK 58*) | Toolchain | No Xcode/Android Studio needed for FYP demo |
 | TypeScript 5.x | Types | Catches API-shape bugs at compile time |
 | @react-navigation/native v6 | Navigation | Stack + Tabs + role-based navigators |
 | @tanstack/react-query v5 | Server state | Caching, retries, background refetch, infinite scroll |
-| zustand | Client state | 1KB; auth/cart/theme only |
+| zustand | Client state | 1KB; auth/cart/theme only (*as built: auth only — there is no cart*) |
 | axios | HTTP | Interceptors for token refresh |
 | react-hook-form + zod | Forms | Schema validation mirroring backend rules |
 | expo-secure-store | Token storage | Keychain/Keystore — **never AsyncStorage for tokens** |
@@ -300,6 +329,10 @@ A single violation of this rule is where 90% of "why is my Django project unmain
 **Explicit non-goal:** the mobile app does **not** talk to Firebase in production. Your prototype's `FB` mock object is replaced by Django Channels WebSockets. One backend, one source of truth.
 
 ### 4.3 Admin web dashboard
+
+> **As built:** not implemented. The admin uses five tabs in the mobile app
+> (`mobile/src/features/admin/`, `navigation/AdminNavigator.tsx`). The table
+> below is the original plan, kept for reference; a web dashboard is future work.
 
 | Package | Purpose |
 |---|---|
@@ -833,6 +866,10 @@ snapsphere/
 └── README.md
 ```
 
+> **As built:** there is no `admin-web/` and no `docker-compose.yml`. The root
+> holds `backend/`, `mobile/`, `ml/`, `docs/`, `prototype/`, `start.sh`,
+> `stop.sh`, `test.sh`, `README.md` and `HOW-TO-RUN.md`.
+
 ### 13.2 Backend
 
 ```
@@ -957,7 +994,7 @@ mobile/
     │   └── layout/{Screen,Header,TabBar}.tsx
     ├── store/
     │   ├── authStore.ts
-    │   ├── cartStore.ts
+    │   ├── cartStore.ts        (as built: not created — no cart)
     │   └── uiStore.ts
     ├── hooks/{useAuth,useDebounce,useWebSocket,useUpload}.ts
     ├── theme/{colors.ts,spacing.ts,typography.ts,shadows.ts}
@@ -1065,11 +1102,11 @@ ml/
 | 4 Core loop | 5–6 | 7 | Booking state machine + notifications |
 | 5 Discovery | 7 | 11 | Search, filters, sorting, map |
 | 6 Trust | 8 | 9 | Reviews, ratings, replies |
-| 7 Commerce | 9 | 8 | Marketplace, wallet, secure downloads |
+| 7 Commerce | 9 | 8 | Marketplace, wallet, secure downloads (*as built: gear classifieds; wallet hidden*) |
 | 8 Intelligence | 10–11 | 10 | Feature store, 3 models, hybrid engine, evaluation |
 | 9 Communication | 12 | 12, 13 | Chat + push notifications |
-| 10 Control | 13 | 14 | Admin dashboard |
-| 11 Insight | 14 | 15 | Analytics, Recharts, reports |
+| 10 Control | 13 | 14 | Admin dashboard (*as built: mobile admin tabs*) |
+| 11 Insight | 14 | 15 | Analytics, Recharts, reports (*as built: plain-View charts*) |
 | 12 Polish | 15 | 17 | RN screens, animation, a11y |
 | 13 Ship | 16 | 16, 18 | OpenAPI docs, deploy, FYP report |
 

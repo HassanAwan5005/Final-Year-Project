@@ -32,6 +32,10 @@ const GROUP_LABEL: Record<string, string> = {
  * The declared runtime settings. Only existing keys can be changed (the
  * server refuses new ones), each value is type-checked server-side, and every
  * change is written to the audit log with its old and new value.
+ *
+ * NOTE: the server does not read these rows yet — bookings, commission and
+ * recommendations use the values in backend/config/settings/base.py. The
+ * subtitle says so rather than implying a change takes effect.
  */
 export function AdminSettingsScreen({ onBack }: { onBack: () => void }) {
   const settings = usePlatformSettings();
@@ -45,7 +49,11 @@ export function AdminSettingsScreen({ onBack }: { onBack: () => void }) {
 
   return (
     <SafeAreaView style={adminStyles.safe} edges={['top', 'left', 'right']}>
-      <AdminHeader title="Platform settings" subtitle="Changes apply immediately and are audited" onBack={onBack} />
+      <AdminHeader
+        title="Platform settings"
+        subtitle="Saved and audited · not yet read by the server"
+        onBack={onBack}
+      />
       {settings.isLoading ? (
         <LoadingState label="Loading settings…" />
       ) : settings.isError ? (

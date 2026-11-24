@@ -196,13 +196,6 @@ export function ProductDetailScreen({
             </View>
           ) : null}
 
-          {product.files.length ? (
-            <View style={styles.stats}>
-              <Stat icon="document-outline" value={String(product.file_count)} label="files" />
-              <Stat icon="server-outline" value={`${product.total_size_mb} MB`} label="total" />
-            </View>
-          ) : null}
-
           {/* ─── Seller ────────────────────────────────────────────────── */}
           <View style={styles.seller}>
             <Avatar
@@ -212,15 +205,6 @@ export function ProductDetailScreen({
             />
             <View style={styles.sellerBody}>
               <Text style={styles.sellerName}>{product.seller.display_name}</Text>
-              {product.files.length ? (
-                <Text style={styles.sellerMeta}>
-                  {product.license_type === 'PERSONAL'
-                    ? 'Personal use licence'
-                    : product.license_type === 'COMMERCIAL'
-                      ? 'Commercial licence'
-                      : 'Extended commercial licence'}
-                </Text>
-              ) : null}
             </View>
             {product.seller.is_verified ? (
               <Ionicons name="checkmark-circle" size={18} color={colors.blue} />
@@ -242,21 +226,6 @@ export function ProductDetailScreen({
                   </View>
                 ))}
               </View>
-            </Section>
-          ) : null}
-
-          {/* ─── Manifest ──────────────────────────────────────────────── */}
-          {product.files.length ? (
-            <Section title={`What you get (${product.files.length})`}>
-              {product.files.map((file) => (
-                <View key={file.id} style={styles.fileRow}>
-                  <Ionicons name="document-outline" size={15} color={colors.dim} />
-                  <Text style={styles.fileName} numberOfLines={1}>
-                    {file.name}
-                  </Text>
-                  <Text style={styles.fileSize}>{file.file_size_mb} MB</Text>
-                </View>
-              ))}
             </Section>
           ) : null}
         </View>
@@ -340,24 +309,6 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Stat({
-  icon,
-  value,
-  label,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  value: string;
-  label: string;
-}) {
-  return (
-    <View style={styles.stat}>
-      <Ionicons name={icon} size={15} color={colors.gold} />
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   header: {
@@ -411,18 +362,6 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
   address: { ...typography.body, color: colors.sub, flex: 1 },
-  stats: {
-    flexDirection: 'row',
-    gap: spacing.xxl,
-    marginTop: spacing.xl,
-    paddingVertical: spacing.lg,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: colors.border,
-  },
-  stat: { alignItems: 'center', gap: 2 },
-  statValue: { ...typography.bodyBold, color: colors.text },
-  statLabel: { ...typography.tiny, color: colors.sub },
   seller: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -431,7 +370,6 @@ const styles = StyleSheet.create({
   },
   sellerBody: { flex: 1 },
   sellerName: { ...typography.bodyBold, color: colors.text },
-  sellerMeta: { ...typography.caption, color: colors.sub },
   section: { marginTop: spacing.xxl },
   sectionTitle: { ...typography.h3, color: colors.text, marginBottom: spacing.md },
   body: { ...typography.body, color: colors.sub, lineHeight: 22 },
@@ -445,16 +383,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   tagText: { ...typography.caption, color: colors.sub },
-  fileRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  fileName: { ...typography.caption, color: colors.text, flex: 1 },
-  fileSize: { ...typography.tiny, color: colors.dim },
   actionBar: {
     padding: spacing.xl,
     borderTopWidth: 1,

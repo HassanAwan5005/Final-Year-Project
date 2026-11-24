@@ -2,9 +2,10 @@
 
 **Photographer Booking & Recommendation Platform** — Final Year Project
 
-A mobile marketplace where buyers discover, compare and book professional
-photographers, guided by a recommendation engine, plus a digital marketplace
-where photographers sell presets, LUTs and templates.
+A mobile app where buyers discover, compare and book professional
+photographers, guided by a recommendation engine, plus a classifieds shop
+(OLX-style) where anyone can post camera and mobile gear for sale and buyers
+message the seller to agree a deal.
 
 | | |
 |---|---|
@@ -23,28 +24,27 @@ where photographers sell presets, LUTs and templates.
 
 ```
 akasha/
-├── backend/          Django REST API  (15 apps, 46 domain tables)
+├── backend/          Django REST API  (15 apps, 57 domain models)
 ├── mobile/           React Native app (Expo, TypeScript)
-├── admin-web/        React + Recharts admin dashboard (planned)
 ├── ml/               Datasets, feature pipelines, model training
-│   ├── data/raw/     The 10 source CSVs
-│   ├── pipelines/    ingest · features · scorer · 3 trainers
+│   ├── data/raw/     The 11 source CSVs
+│   ├── pipelines/    ingest · features · scorer · trainers (ranker, CF, content, sentiment)
 │   └── artifacts/    Trained models (.joblib) + metrics.json
-├── docs/             Module design documents
-├── prototype/        The original SnapSphere RN prototype (UI reference)
-└── final version.docx  Project proposal
+├── docs/             Architecture + project-state documents
+└── prototype/        The original SnapSphere RN prototype (UI reference)
 ```
 
 ---
 
 ## Running it
 
-Everything is already installed and seeded. Three scripts do the work:
+See **[HOW-TO-RUN.md](HOW-TO-RUN.md)** for a fresh clone. Once installed and
+seeded, three scripts do the work:
 
 ```bash
 ./start.sh              # MySQL + Redis + Django API
-./start.sh --workers    # ...plus Celery worker and scheduler
-./test.sh               # 23-check end-to-end API test
+./start.sh --workers    # ...plus Celery worker and scheduler (scheduled jobs)
+./test.sh               # end-to-end API smoke test
 ./stop.sh               # stop the servers
 ```
 
@@ -65,46 +65,35 @@ Then open:
 cd mobile && npx expo start
 ```
 
-Scan the QR code with **Expo Go**. The app auto-detects your machine's LAN IP
-from the Expo host, so no configuration is normally needed. To override, set
-`EXPO_PUBLIC_API_URL` in `mobile/.env` — see `src/api/config.ts`.
+Scan the QR code with **Expo Go** (the SDK 58 build). The app auto-detects
+your machine's LAN IP from the Expo host, so no configuration is normally
+needed. To override, set `EXPO_PUBLIC_API_URL` in `mobile/.env` — see
+`src/api/config.ts`.
 
-Your phone and Mac must be on the same Wi-Fi.
+Your phone and computer must be on the same Wi-Fi.
 
 ### Machine learning
 
 ```bash
 backend/.venv/bin/python -m ml.pipelines.ingest --audit   # data quality report
-backend/.venv/bin/python -m ml.train                      # train all three models
+backend/.venv/bin/python -m ml.train                      # train all models
 backend/.venv/bin/python -m ml.train --only sentiment     # just one
 ```
 
-### First-time setup on a new machine
+(On Windows the interpreter is `backend/.venv/Scripts/python.exe`.)
 
-<details>
-<summary>Expand — only needed if the venv or database does not exist</summary>
+---
 
-```bash
-brew install python@3.12 mysql redis
-brew services start mysql && brew services start redis
+## What the app does
 
-cd backend
-/usr/local/opt/python@3.12/bin/python3.12 -m venv .venv
-export MYSQLCLIENT_CFLAGS="-I/usr/local/opt/mysql/include/mysql"
-export MYSQLCLIENT_LDFLAGS="-L/usr/local/opt/mysql/lib -lmysqlclient"
-.venv/bin/python -m pip install -r requirements/dev.txt
-cp .env.example .env      # then set SECRET_KEY
+| Role | Main features |
+|---|---|
+| **Buyer** | Home with AI recommendations and "Near me", search with 12 filters and 6 sorts, AI matchmaker (typed request) and visual search (reference photo), photographer profiles, hour-based booking and 1/2-day packages, chat, reviews, saved items, Shop (buy and sell gear) |
+| **Photographer** | Dashboard (earnings, funnel, top services), booking requests and jobs, services and packages, calendar, portfolio, review replies, Shop |
+| **Admin** | Signs in on the normal login screen. Tabs: **Dashboard**, **Users** (search, block/unblock), **Reports** (reported ads, reviews and chat messages — take down or dismiss), **Bookings** (search, view, force-cancel), **More** (audit log, platform settings, broadcasts) |
 
-mysql -u root -e "CREATE DATABASE snapsphere CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-mysql -u root -e "CREATE USER 'snapsphere'@'localhost' IDENTIFIED BY 'snapsphere';"
-mysql -u root -e "GRANT ALL ON snapsphere.* TO 'snapsphere'@'localhost';"
-
-.venv/bin/python manage.py migrate
-.venv/bin/python manage.py seed_data --flush
-
-cd ../mobile && npm install
-```
-</details>
+Every admin action is re-checked on the server (ADMIN role only) and written
+to an audit log that cannot be edited.
 
 ---
 
@@ -116,9 +105,11 @@ cd ../mobile && npm install
 | Photographer | `photographer1@snapsphere.pk` … `photographer200@…` | `photographer123` |
 | Buyer | `buyer1@snapsphere.pk` … | `buyer12345` |
 
-Seeded from the real datasets: **200 photographers, 244 buyers, 600 services,
-499 bookings, 117 reviews, 125 products, 2,221 interactions, 1,196 daily
-analytics rows.**
+The seed builds on the supplied datasets: **~200 photographers, ~245 buyers,
+1,000 services, ~52,000 bookings, ~51,800 reviews, 126 shop ads, 684
+portfolio images.** The booking and review history is **generated** so that
+each photographer's headline rating has real rows behind it; review text is
+drawn from `yelp.csv` and matched to the star rating.
 
 ---
 
@@ -155,29 +146,45 @@ Not one photographer attribute predicts whether a booking happened:
 
 Booking rate by rating quartile: **32.3% / 32.5% / 32.8% / 31.2%** — flat.
 
-**Response:** `ml/pipelines/train_ranker.py` runs a signal test *before*
-training. Finding none, it ships a **transparent weighted scorer** with stated,
-domain-justified weights instead of a model that would be confidently wrong
-(a fitted regressor scores R² = −0.03, worse than predicting the mean).
-
-The nightly retrain re-runs the same test against real outcomes collected in
-the `recommendation_events` table and switches to the learned model
-automatically the moment genuine signal appears — no code change required.
+**Response:** the ranker is no longer trained on this file. The first version
+shipped a transparent weighted scorer (a regressor fitted on this CSV scored
+R² = −0.03, worse than predicting the mean). The current ranker
+(`ml/pipelines/train_ranker.py`) is trained on the **booking history in the
+database** instead — see below.
 
 ---
 
-## Model results (honest, held-out)
+## Model results (held-out)
 
 | Model | Algorithm | Result |
 |---|---|---|
 | **Sentiment** | TF-IDF (1,2-gram) + LogisticRegression | accuracy **0.789**, macro-F1 **0.681** |
-| **Ranker** | Transparent weighted scorer | no learnable signal in source data — see above |
+| **Ranker** | RandomForest, chosen over Ridge and GradientBoosting by grouped cross-validation | temporal hold-out: R² **0.924**, Spearman **0.96** |
 | **Collaborative filter** | Item-item cosine on weighted implicit feedback | HitRate@10 **0.094** (1.75× random) at 1.1% density |
+| **Content model** | TF-IDF photographer profiles vs the buyer's taste | HitRate@10 **0.046** (popularity baseline 0.093) |
 
-The CF number is deliberately modest. An earlier version of the evaluation
-reported 0.97 — it was leaking, because the similarity matrix had been built
-from data that included the held-out interaction. The evaluation now
-recomputes similarity per trial.
+**Reading these honestly:**
+
+* **Ranker.** It predicts how much a photographer will be booked in the next
+  180 days from what was known before. It is evaluated on later time periods
+  it never saw. Its training data is the **seeded** booking history, which
+  gives each photographer a steady booking rate — so past popularity
+  (`popularity_score`, 95% of feature importance) predicts the future almost
+  perfectly. The score shows the pipeline works end to end; it is not
+  evidence of how well it predicts real buyers. The nightly retrain
+  (`apps/recommendations/tasks.py`) will learn from real bookings as they
+  accumulate.
+* **Collaborative filter.** An earlier evaluation reported 0.97 — it was
+  leaking, because the similarity matrix included the held-out interaction.
+  It now recomputes similarity per trial.
+* **Content model.** It scores below popularity on this data. Its role in the
+  hybrid blend is cold start: it can match a buyer's stated preferences
+  before they have any history.
+
+The matchmaker is a **rule-based parser** (city, budget, category, dates) and
+visual search compares **hand-crafted image features** (colour, contrast,
+texture) by cosine similarity — neither uses a language model or a neural
+network.
 
 ---
 
@@ -213,11 +220,36 @@ another app's `models.py` except for foreign-key declarations.
 
 ---
 
+## Known limitations
+
+* **No payment gateway.** Booking commission and payout are calculated and
+  shown, but no money moves. The shop is classifieds: buyer and seller settle
+  off-platform.
+* **Built but not shown in the app:** wallet and top-ups, photographer approval
+  requests (new photographers are listed automatically), and shop orders and
+  downloads (kept so orders placed before checkout was removed still work).
+* **Notifications:** in-app notifications work; push delivery is a log line
+  (no Expo/FCM credentials). Email uses Django's console backend in
+  development, so verification codes appear in the server log.
+* **Platform settings** (admin → More → Platform settings) are stored and
+  audited, but the server currently reads its values from configuration
+  (`config/settings/base.py`), not from these rows.
+* **Rate limits** are configured but switched off in development
+  (`config/settings/dev.py`).
+* **Scheduled jobs** (booking expiry, auto-complete, reminders, nightly
+  retrain, analytics rollups) run only when Celery is started:
+  `./start.sh --workers`.
+* **Chat** messages are stored on the server; they are not end-to-end
+  encrypted.
+
+---
+
 ## Documentation
 
 | Document | Contents |
 |---|---|
-| **[docs/PROJECT-STATE.md](docs/PROJECT-STATE.md)** | **Start here when resuming** — module status, decisions, traps already hit, next task |
+| **[HOW-TO-RUN.md](HOW-TO-RUN.md)** | Step-by-step setup from a fresh clone, Windows included |
+| **[docs/PROJECT-STATE.md](docs/PROJECT-STATE.md)** | **Start here when resuming** — module status, decisions, traps already hit |
 | [docs/01-system-architecture.md](docs/01-system-architecture.md) | ADRs, NFRs, security model, threat model, folder structure, deployment topology |
 
 ---
@@ -227,25 +259,27 @@ another app's `models.py` except for foreign-key declarations.
 | # | Module | State |
 |---|---|---|
 | 1 | System architecture | ✅ Documented |
-| 2 | Database design | ✅ 46 domain tables, migrated, seeded |
-| 3 | Authentication | ✅ Complete, verified end-to-end |
-| 4 | Buyer module | 🟡 Discovery done; wishlist/wallet pending |
-| 5 | Photographer module | 🟡 Read APIs done; write APIs pending |
-| 6 | Portfolio | 🟡 Models + read; upload pending |
-| 7 | **Booking** | ⬜ **Next** — models + constraints exist, no services/API |
-| 8 | Digital marketplace | ⬜ Models only |
-| 9 | Reviews & ratings | 🟡 Models + read; write API pending |
-| 10 | AI recommendation | ✅ Pipelines, 3 models, live engine with explanations |
+| 2 | Database design | ✅ 57 domain models, migrated, seeded |
+| 3 | Authentication | ✅ Register, login, email verification (OTP), password reset |
+| 4 | Buyer module | ✅ Profile, saved items, near me |
+| 5 | Photographer module | ✅ Services and packages, calendar, profile editing, dashboard |
+| 6 | Portfolio | ✅ Upload (EXIF stripped, 3 sizes), featured photos, viewer |
+| 7 | Booking | ✅ Hour-based, 1/2-day packages, state machine, timeline |
+| 8 | Shop | ✅ OLX-style classifieds: post, edit, mark sold, delete, report, message seller |
+| 9 | Reviews & ratings | ✅ Write, edit, reply, helpful votes, report, sentiment |
+| 10 | AI recommendation | ✅ Hybrid engine, matchmaker, visual search |
 | 11 | Search & filters | ✅ 12 filters, 6 sorts, distance |
-| 12 | Notifications | 🟡 Models + service + consumer; API pending |
-| 13 | Chat | 🟡 Models + consumers; REST API pending |
-| 14 | Admin | ⬜ Models only |
-| 15 | Analytics | ⬜ Models + task stubs |
+| 12 | Notifications | ✅ In-app bell, preferences, quiet hours (push delivery not connected) |
+| 13 | Chat | ✅ Live chat, read receipts, delete for me / everyone, smart replies |
+| 14 | Admin | ✅ Dashboard, users, reports, bookings, audit log, settings, broadcasts |
+| 15 | Analytics | ✅ Photographer dashboard, nightly rollups |
 | 16 | API documentation | ✅ Auto-generated at `/api/v1/docs/` |
-| 17 | React Native screens | 🟡 Auth + Home + Explore + Detail working |
+| 17 | React Native screens | ✅ Buyer, photographer and admin apps |
 | 18 | Deployment | ✅ Documented in `docs/01` §12 |
 
-**Code:** 222 backend files (13,349 lines) · 33 mobile files (4,765 lines) ·
-9 ML files (1,449 lines).
-**Data:** 77 tables · 445 users · 200 photographers · 52,199 bookings ·
-51,822 reviews.
+**Code (measured 24 Nov 2026):** 185 backend files (29,103 lines, excluding
+migrations and tests) · 98 mobile files (24,771 lines) · 10 ML files (1,749
+lines).
+**Tests:** 726 backend tests (pytest) · `./test.sh` end-to-end smoke test.
+**Data:** 78 tables · 448 users · 201 photographers · 52,203 bookings ·
+51,822 reviews · 126 shop ads.

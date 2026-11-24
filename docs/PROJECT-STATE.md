@@ -1,10 +1,15 @@
 # SnapSphere — Project State
 
-**Last updated:** 23 November 2026
+**Last updated:** 24 November 2026
 **Next task:** Nothing is stubbed. Every module in §3 is complete. Remaining work
 is polish and hardening — see §18. What changed between August and November
 (the shop became an OLX-style classifieds board, booking became hour-based,
-Expo moved to SDK 58) is in §17.
+Expo moved to SDK 58, ads no longer need approval, the admin app got five tabs)
+is in §17.
+
+Sections 8–15 are module write-ups **as of the date in their heading** and are
+kept as history. Where they disagree with §3–§7 or §17, those sections are
+current.
 
 Read this first when resuming. It records what exists, what was decided and
 why, and exactly where to pick up.
@@ -16,10 +21,10 @@ why, and exactly where to pick up.
 ```bash
 cd /e/photographer-booking-app   # Windows: run in Git Bash, see HOW-TO-RUN.md
 ./start.sh          # MySQL + Redis + Django on :8000  (idempotent)
-./test.sh           # 150-check API smoke test — should be ALL PASSED
+./test.sh           # 155-check API smoke test — should be ALL PASSED
 cd mobile && npx expo start
 
-# Unit tests (584, ~75s). --create-db after any migration.
+# Unit tests (726). --create-db after any migration.
 
 # Analytics rollups. Needed once after a fresh seed, or charts are empty.
 cd backend && .venv/bin/python manage.py backfill_analytics --days 400
@@ -46,22 +51,19 @@ photographer `photographer1@snapsphere.pk` / `photographer123`.
 
 ## 2. Current size
 
-Measured 17 August 2026 and not re-measured since. On 23 November the backend
-had 608 `def test_` functions (parametrised cases make the pytest count
-higher).
+Measured 24 November 2026.
 
 | Area | Files | Lines |
 |---|---|---|
-| Backend (Django) | 250 | 34,034 |
-| ML pipelines | 9 | 1,449 |
-| Mobile (TypeScript) | 77 | 19,190 |
-| Backend tests | 21 files | 584 tests |
-| API smoke test | `./test.sh` | 150 checks |
+| Backend (Django, excluding migrations and tests) | 185 | 29,103 |
+| ML pipelines | 10 | 1,749 |
+| Mobile (TypeScript) | 98 | 24,771 |
+| Backend tests | 26 files | 726 tests (645 `def test_`, plus parametrised cases) |
+| API smoke test | `./test.sh` | 155 checks, 17 sections |
 
-**Database:** 77 tables · 445 users · 200 photographers · 52,199 bookings ·
-51,822 reviews · 124 products · 362 product files · 496 generated cover
-images · 40 funded wallets · 29,343 daily analytics rows · 6,765 monthly
-revenue snapshots.
+**Database:** 78 tables · 448 users · 201 photographers · 52,203 bookings ·
+51,822 reviews · 126 shop ads · 684 portfolio images. (Wallet, top-up, order
+and download tables still exist; see §3 "Built but not shown in the app".)
 
 ---
 
@@ -70,25 +72,32 @@ revenue snapshots.
 | # | Module | State |
 |---|---|---|
 | 1 | System architecture | ✅ Documented — `docs/01-system-architecture.md` |
-| 2 | Database design | ✅ 46 domain tables, migrated, seeded |
+| 2 | Database design | ✅ 57 domain models, migrated, seeded |
 | 3 | Authentication | ✅ Complete, verified end-to-end |
-| 4 | **Buyer module** | ✅ **Complete — profile, wallet, top-ups, wishlist, purchases** |
+| 4 | **Buyer module** | ✅ **Complete — profile, saved items, near me, purchases (old orders)** |
 | 5 | **Photographer module** | ✅ **Complete — services & pricing, availability editing, profile editing** |
 | 6 | **Portfolio** | ✅ **Complete — upload with EXIF stripping, 3 renditions, albums, featuring** |
 | 7 | **Booking** | ✅ **Complete — state machine, API, hour-based calendar, 1 and 2 day packages, screens** |
-| 8 | **Shop** | ✅ **OLX-style — anyone sells camera/mobile gear, admin approves ads, buyers message the seller (no cart or checkout)** |
+| 8 | **Shop** | ✅ **OLX-style — anyone sells camera/mobile gear, ads go live without approval, mark sold / delete, buyers report or message the seller (no cart or checkout)** |
 | 9 | **Reviews & ratings** | ✅ **Complete — write API, replies, helpful votes, sentiment, moderation, editable at any time, screens** |
 | 10 | AI recommendation | ✅ Pipelines, 3 models, live engine, explanations, matchmaker, visual search |
 | 11 | Search & filters | ✅ 12 filters, 6 sorts, distance |
 | 12 | **Notifications** | ✅ **Complete — REST API, badges, preferences, quiet hours, devices, live bell** |
 | 13 | **Chat** | ✅ **Complete — REST + WebSocket, read watermark, mute/block, delete for me / for everyone, smart replies, product threads, screens** |
-| 14 | **Admin** | ✅ **Complete — approvals, moderation, users, wallets, settings, broadcasts, audit log, Pending listings screen in the app** |
+| 14 | **Admin** | ✅ **Complete — admin app with Dashboard, Users (block/unblock), Reports (ads, reviews, messages), Bookings (search, force-cancel), More (audit log, settings, broadcasts)** |
 | 15 | **Analytics** | ✅ **Photographer dashboard — rollups, revenue chart, funnel, top services** |
 | 16 | API docs | ✅ Auto-generated at `/api/v1/docs/` |
-| 17 | RN screens | ✅ **All 10 tabs live — no placeholder screens left** |
+| 17 | RN screens | ✅ **Buyer (5 tabs), photographer (6 tabs) and admin (5 tabs) apps — no placeholder screens left** |
 | 18 | Deployment | ✅ Documented in `docs/01` §12 |
 | 19 | Availability calendar | ✅ Read API — computed, 3 queries per window |
 | 20 | Wishlist | ✅ Toggle + split lists, reusing each feature's own card |
+
+**Built but not shown in the app** (backend code and tables kept on purpose,
+because other features depend on them): wallet, top-ups and admin wallet
+adjustment; photographer approval requests (new photographers are listed
+automatically, `is_approved` defaults to true); shop orders and downloads
+(only for orders placed before checkout was removed; product reviews depend
+on them).
 
 ---
 
@@ -132,19 +141,23 @@ GET /availability/photographers/{id}/rules/   weekly working pattern
 
 **Shop** (OLX-style since Nov 2026, see §17) —
 ```
-GET  /marketplace/products/           approved, published ads; search, filters, sorts
+GET  /marketplace/products/           live ads (not sold, not removed); search, filters, sorts
 GET  /marketplace/products/{slug}/    the ad page
+POST /marketplace/products/{slug}/report/   report someone else's ad → the admin Reports tab
 GET  /marketplace/products/filters/   real types + true price range
-GET  /marketplace/products/featured|bestsellers/
-GET/POST /marketplace/seller/products/        own ads incl. "In review"; any buyer or photographer may sell
-GET/PATCH /marketplace/seller/products/{id}/  edit the whole ad, photos included
+GET  /marketplace/products/featured|bestsellers/   (not used by the app)
+GET/POST /marketplace/seller/products/        own ads incl. sold and "Removed"; any buyer or photographer may sell
+GET/PATCH/DELETE /marketplace/seller/products/{id}/  edit the whole ad (photos included) or soft-delete it
+POST /marketplace/seller/products/{id}/mark-sold|mark-available/
 GET  /marketplace/seller/products/summary/
 GET  /marketplace/orders/ · /orders/purchases/   receipts for orders placed before checkout was removed
 POST /marketplace/orders/items/{id}/download/   mints a single-use ticket (old orders)
 GET  /marketplace/download/{token}/   redeems it, streams once
 ```
 There is no cart or checkout route any more. A buyer opens a chat with the
-seller from the ad (`POST /chat/conversations/` with the product).
+seller from the ad (`POST /chat/conversations/` with the product). New ads are
+live as soon as they are posted; an ad an admin removed stays removed even if
+the seller edits it.
 
 **Photographer studio (Modules 5 & 6)** —
 ```
@@ -218,27 +231,31 @@ ws://…/ws/chat/{id}/  ·  /ws/notifications/  ·  /ws/presence/
 **Administration (Module 14)** — every route `IsAdmin`, every write audited
 ```
 GET  /admin/dashboard/                  queue depths (live) + totals + trend (rollups)
-GET  /admin/approvals/                  oldest first; ?status=
-POST /admin/approvals/{id}/approve|reject|more-info/
-GET  /admin/flags/                      one queue for every content type
+GET  /admin/flags/                      one queue for every content type (ads, reviews, messages…)
 POST /admin/flags/{id}/claim|resolve/    ACTIONED also takes the content down
-GET  /admin/users/  ·  /admin/users/{id}/    + cross-app stats
-POST /admin/users/{id}/block|unblock|adjust-wallet/
-GET  /admin/topups/  ·  POST /admin/topups/{id}/approve|reject/
-GET  /admin/products/  ·  POST /admin/products/{id}/approve|remove/
+GET  /admin/users/  ·  /admin/users/{id}/    ?q=&role=&blocked= · + cross-app stats
+POST /admin/users/{id}/block|unblock/
+GET  /admin/bookings/  ·  /admin/bookings/{id}/   ?status=&q= (reference or either party) · + timeline
 POST /admin/bookings/{id}/force-cancel/  through the state machine, never an UPDATE
+GET  /admin/approvals/  ·  POST /admin/approvals/{id}/approve|reject|more-info/   (no app screen)
+GET  /admin/topups/  ·  POST /admin/topups/{id}/approve|reject/                   (no app screen)
+POST /admin/users/{id}/adjust-wallet/                                            (no app screen)
 GET  /admin/audit/                      append-only; no write route exists
-GET  /admin/settings/  ·  PATCH /admin/settings/{key}/   declared keys only
+GET  /admin/settings/  ·  PATCH /admin/settings/{key}/   declared keys only (stored + audited;
+                                        the server does not read them yet — see §18)
 GET  /admin/settings/public/            the ONE AllowAny route
 POST /admin/broadcasts/                 fanned out by a task
 ```
+The admin products queue (`/admin/products/`, approve / remove) was removed on
+24 Nov 2026: ads need no approval, and a reported ad is taken down from the
+Reports tab (`resolve` with ACTIONED calls `unpublish_product`).
 
 **Profile & wallet** —
 ```
 GET/PATCH /profiles/me/ · /profiles/me/update/    buyer prefs or photographer listing
-GET  /profiles/me/wallet/             balance + last 10 ledger rows
-GET  /profiles/me/wallet/transactions/
-POST /profiles/me/wallet/topups/request/   receipt upload; credits NOTHING
+GET  /profiles/me/wallet/             balance + last 10 ledger rows      (not shown in the app)
+GET  /profiles/me/wallet/transactions/                                   (not shown in the app)
+POST /profiles/me/wallet/topups/request/   receipt upload; credits NOTHING (not shown in the app)
 GET  /wishlist/ · POST /wishlist/toggle/   one endpoint for the heart icon
 ```
 
@@ -251,18 +268,23 @@ server-driven action buttons, photographer Requests tab with one-tap accept and
 reason-required decline.
 **Shop flow**: the Shop tab opens a Buy / Sell page for buyers and
 photographers alike. Buy is a grid with search and type chips; the ad page has
-a full-screen photo viewer, the seller's address and a "Message seller" button
-that opens a chat showing the product. Sell is a form with photos, title,
-description, category, price and a mandatory address; new and edited ads show
-"In review" under My listings until an admin approves them.
+a full-screen photo viewer, the seller's address, a "Message seller" button
+that opens a chat showing the product, and a flag icon to report the ad. Sell
+is a form with photos, title, description, category, price and a mandatory
+address; the ad is live as soon as it is posted. The seller can mark it sold
+(and back on sale) or delete it from My listings or the ad page.
 **Profile flow**: role-aware profile with stats, availability toggle for
 photographers, a "verify your email" entry while the email is unverified,
 Saved screen with photographer/product tabs, and My listings. The wallet
 screen, balance card and top-up prompts were removed from the app (the
 backend routes still exist).
-**Admin**: an admin account signs in on the normal login screen and lands on a
-Pending listings screen to approve or reject ads, with the reason sent to the
-seller.
+**Admin**: an admin account signs in on the normal login screen and gets five
+tabs — **Dashboard** (open reports, user and booking totals, last 30 days,
+14-day bookings chart), **Users** (search, filter, detail, block with a reason /
+unblock), **Reports** (reported ads, reviews and chat messages; claim, dismiss
+or take down), **Bookings** (search by reference or either party, filter by
+status, detail with timeline, force cancel with a reason) and **More** (audit
+log, platform settings, broadcasts, log out).
 **Dashboard**: live headline counters (pending requests, upcoming shoots),
 lifetime earnings, a six-month earnings bar chart with a growth badge, the
 discovery funnel, best-selling services and where the work comes from — all
@@ -296,13 +318,13 @@ change.
 |---|---|
 | **Expo SDK 58** (moved from 54 in Nov 2026) | Expo Go supports one SDK at a time and the test devices run the SDK 58 build. See `mobile/AGENTS.md`. Do NOT change the SDK without confirming the Expo Go build on the test devices first. |
 | **Modular monolith**, not microservices | ADR-001 in `docs/01` |
-| **Ranker ships in "prior" mode** | The training data has no learnable signal (§6). This is deliberate and documented, not an unfinished model. |
+| **Ranker is trained on database booking history, not `buyer_interactions.csv`** | The CSV has no learnable signal (§6). The ranker now learns from bookings in the database with a temporal hold-out; on seeded data its score is optimistic (§6). |
 | **Sentiment trains on `yelp.csv`, displays generated prose** | Yelp is the right training corpus; its restaurant text is wrong for display. See `apps/core/review_text.py`. |
 | **Money is `DECIMAL`, serialized as a string** | JS floats cannot represent currency exactly |
 | **PKR is the platform currency** | Dataset prices ×100, rounded to nearest 500 |
 | **No payment gateway, and no money moves in the shop** | Proposal excludes online payments. The shop is now a classifieds board: buyer and seller agree in chat and settle off-platform. The wallet and admin-verified top-ups still exist in the backend but are no longer shown in the app. |
 | **Product files are never URL-addressable** | A digital product is worthless the moment its file URL leaks. `core/storage.py` makes `.url` raise; the only path to bytes is a redeemed `DownloadToken`. Still true for orders placed before checkout was removed. |
-| **Every new or edited ad goes through admin approval** | Any buyer or photographer can post an ad (seller is the user account, not the photographer profile). Changing photos, title, description or category sends a live ad back to review; changing only price or address keeps it live. Otherwise an approved ad could be swapped for anything. |
+| **Ads go live without admin approval (since 24 Nov 2026)** | Any buyer or photographer can post an ad (seller is the user account, not the photographer profile) and it is live at once; edits keep it live. Moderation is after the fact: buyers report an ad, and the admin takes it down from the Reports tab. An ad an admin removed stays removed even if the seller edits it. |
 | **Services are archived, not deleted, once booked** | `Booking.service` is PROTECT and the price is snapshotted. Deleting would break history; `can_delete` tells the UI which verb to offer. |
 | **Narrowing the calendar never cancels a booking** | A commitment already made stays made. Blocking a range reports how many bookings fall inside so the photographer cancels them deliberately, with a reason the buyer sees. |
 | **Portfolio upload strips EXIF** | Phone photos embed GPS. A newborn shoot would otherwise publish somebody's home address. Not an optimisation — a privacy requirement. |
@@ -320,7 +342,7 @@ change.
 | **Every privileged admin action audits inside its own transaction** | A log claiming a user was blocked when the block rolled back is worse than no log. |
 | **Admins cannot edit the audit log or move money outside the ledger** | There is no service function for either, and Django's admin registers `AuditLog` read-only. |
 | **Platform settings are declared, not created ad hoc** | A settings table that accepts arbitrary keys becomes a junk drawer where a typo silently creates a second setting nothing reads. |
-| **The admin surface is this API plus Django admin, not a React SPA** | A second frontend with its own auth, build and deploy story, for an audience of one. None of the rules live in the UI — they are all enforced server-side. |
+| **The admin surface is the mobile admin app + this API + Django admin, not a React SPA** | A second frontend with its own auth, build and deploy story, for an audience of one. The admin uses five tabs in the same mobile app; none of the rules live in the UI — they are all enforced server-side. A separate web dashboard is future work. |
 
 ---
 
@@ -337,20 +359,28 @@ attribute predicts booking: rating r=−0.006 (p=0.90), response time r=−0.000
 (p=0.998), χ²(category, status) p=0.95. Booking rate by rating quartile:
 32.3 / 32.5 / 32.8 / 31.2 — flat.
 
-**Consequence:** `ml/pipelines/train_ranker.py` runs a **signal test before
-training**. Finding none, it ships a transparent weighted scorer rather than a
-model that would be confidently wrong (a fitted regressor scores R² = −0.03,
-worse than the mean). The nightly retrain re-runs the same test against real
-outcomes in `recommendation_events` and switches to the learned model
-automatically once signal appears.
+**Consequence:** the ranker is no longer trained on this CSV. The first
+version shipped a transparent weighted scorer (a regressor fitted on the CSV
+scored R² = −0.03, worse than the mean). The current
+`ml/pipelines/train_ranker.py` trains on the **booking history in the
+database**: features as of a snapshot date, target = share of bookings in the
+next 180 days, temporal hold-out on the last snapshots, model chosen by
+GroupKFold CV (Ridge / RandomForest / GradientBoosting → RandomForest).
+
+**Caveat for the report:** that history is **seeded**, with a steady booking
+rate per photographer, so `popularity_score` carries 95% of the feature
+importance and the score is optimistic. It shows the pipeline works end to
+end, not how well it predicts real buyers; the nightly retrain will learn from
+real bookings as they accumulate.
 
 **Honest held-out metrics:**
 
 | Model | Result |
 |---|---|
 | Sentiment | accuracy 0.789, macro-F1 0.681 |
-| Ranker | transparent scorer — no learnable signal in source data |
+| Ranker | RandomForest, temporal hold-out: R² 0.924, Spearman 0.96 (seeded data — see caveat) |
 | Collaborative filter | HitRate@10 0.094 (1.75× random) at 1.1% density |
+| Content model | HitRate@10 0.046 vs popularity baseline 0.093 — its role is cold start |
 
 The CF number was 0.97 before I fixed a leak — the similarity matrix had been
 built from data including the held-out interaction. It now recomputes
@@ -1056,7 +1086,7 @@ and the `except` arm that keeps one immovable booking from aborting a block.
 
 ## 16. What `./test.sh` now covers
 
-150 checks against the running server, in 15 sections. The four new ones drive
+155 checks against the running server, in 17 sections. The sections below drive
 whole flows rather than pinging endpoints:
 
 * **§11 Reviews** — completes a real booking, refuses a bare 1★, posts the
@@ -1071,7 +1101,11 @@ whole flows rather than pinging endpoints:
   and proves a stranger gets 404 on both read and write.
 * **§14 Administration** — dashboard, every queue, the audit log's absent write
   path, a setting change that appears in the log, and 403 for a photographer and
-  a buyer on every route.
+  a buyer on every route. Since 24 Nov 2026 also: the admin bookings list,
+  status filter, search by reference and detail timeline (read-only), proof that
+  the old ad-approval route is gone (404), and the report-ad endpoint's login and
+  validation checks (a real report is covered by pytest, so the script writes
+  nothing there).
 
 Each section restores what it touched: the booking, the review, the rating, the
 conversation, the notifications and the setting value all go back to how they
@@ -1165,10 +1199,10 @@ contradicts them, this section is current.
 
 ### Admin
 
-* Admins sign in on the normal login screen (`navigation/AdminNavigator.tsx`)
-  and get a **Pending listings** screen. The admin product queue includes
-  photos and description; rejecting a pending ad also unpublishes it, and the
-  reason is sent to the seller.
+* Admins sign in on the normal login screen (`navigation/AdminNavigator.tsx`).
+  Until 24 Nov they got a **Pending listings** screen; that screen and the
+  product approval queue were removed when ads stopped needing approval (see
+  "24 November 2026" below).
 
 ### Recommendations and portfolio AI
 
@@ -1188,8 +1222,27 @@ contradicts them, this section is current.
   records the SDK 58 notes.
 * **Windows support** — `start.sh`, `stop.sh` and `test.sh` detect Windows;
   `HOW-TO-RUN.md` has the Git Bash steps.
-* `test.sh` was updated for hour-based booking and the shop changes. Its
-  check count has not been re-measured.
+* `test.sh` was updated for hour-based booking and the shop changes; on
+  24 Nov it had 155 checks (see §16).
+
+### 24 November 2026
+
+* **Shop:** sellers mark ads sold / available or delete them
+  (`marketplace.0008`); ads are **live without approval** (`marketplace.0009`
+  put waiting ads live, never ones an admin removed). Buyers can **report an
+  ad** (`POST /marketplace/products/{slug}/report/`, flag icon on the ad page).
+  The ad page no longer shows the file list, file stats or licence text left
+  over from the digital-presets store.
+* **Admin app:** five tabs — Dashboard, Users, Reports, Bookings, More (audit
+  log, platform settings, broadcasts). New backend routes for it:
+  `GET /admin/bookings/` (`?status=`, `?q=`) and `GET /admin/bookings/{id}/`.
+  Tests: `administration/tests/test_admin_screens.py`.
+* **Removed:** the admin product approval queue (`/admin/products/` list /
+  approve / remove, `approve_product`, the `products_awaiting_review` count),
+  `PendingListingsScreen` and the unused `PortfolioScreen`. Taking down a
+  reported ad still works through Reports → `unpublish_product`.
+* "Near me" on the buyer Home screen; portfolio management for photographers.
+* README, HOW-TO-RUN and this file brought up to date with the code.
 
 ## 18. What is left
 
@@ -1199,7 +1252,10 @@ blocking a demo:
 | Item | Note |
 |---|---|
 | **Push provider** | The delivery bookkeeping is real and tested; the provider call is a log line. Needs FCM/Expo credentials, and `expo-notifications` is a native dependency that must be checked against the SDK 58 pin first. |
-| **Email delivery** | `EMAIL_BACKEND` is the console backend. `NotificationDelivery` already models the EMAIL channel. |
+| **Email delivery** | `EMAIL_BACKEND` is the console backend in development, so OTP codes are printed in the Django log. `NotificationDelivery` already models the EMAIL channel. |
+| **Platform settings are not read** | The admin Settings screen stores and audits the `PlatformSetting` rows, but bookings, commission and the recommender read their values from `config/settings/base.py` (e.g. the content weight is 0.30 in code, 0.55 in the row). The screen says so. Wiring them changes live behaviour, so it was left as a decision. |
+| **Scheduled jobs need Celery** | Booking expiry, auto-complete, reminders, rollups and the nightly retrain run only with `./start.sh --workers`. |
+| **Shop model names** | `DigitalProduct`, `ProductFile`, `LicenseType`, `DownloadToken` date from the digital-presets store. Renaming needs migrations, so the names stay; the app no longer shows files or licences on ads. |
 | **`consumers.py` coverage** | The WebSocket path is hand-tested. Both transports write through the same service, so the rules are covered even where the socket is not. |
 | **Per-user chat archiving** | Currently one column on the conversation, so it hides the thread for both sides. |
 | **Spread seeded `BuyerInteraction` rows over history** | Would fill the discovery funnel in the demo. Deliberately not done — see §11's "known data limitation". |
@@ -1208,7 +1264,7 @@ blocking a demo:
 
 ```
 akasha/
-├── start.sh / stop.sh / test.sh   run + verify (150 checks, 15 sections)
+├── start.sh / stop.sh / test.sh   run + verify (155 checks, 17 sections)
 ├── backend/
 │   ├── pytest.ini · conftest.py   test config + shared fixtures
 │   ├── config/settings/           base · dev · prod · test
@@ -1227,7 +1283,7 @@ akasha/
 │   └── theme/                     colours from the original prototype
 ├── ml/
 │   ├── data/raw/                  the 11 source CSVs
-│   ├── pipelines/                 ingest · features · scorer · 3 trainers
+│   ├── pipelines/                 ingest · features · scorer · trainers (ranker, CF, content, sentiment)
 │   └── artifacts/                 trained models + metrics.json
 ├── docs/
 │   ├── 01-system-architecture.md  ADRs, NFRs, security, deployment
