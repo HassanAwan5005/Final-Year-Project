@@ -59,7 +59,7 @@ Measured 24 November 2026.
 | ML pipelines | 10 | 1,749 |
 | Mobile (TypeScript) | 98 | 24,771 |
 | Backend tests | 26 files | 726 tests (645 `def test_`, plus parametrised cases) |
-| API smoke test | `./test.sh` | 155 checks, 17 sections |
+| API smoke test | `./test.sh` | 155 checks, 16 sections |
 
 **Database:** 78 tables · 448 users · 201 photographers · 52,203 bookings ·
 51,822 reviews · 126 shop ads · 684 portfolio images. (Wallet, top-up, order
@@ -1086,7 +1086,7 @@ and the `except` arm that keeps one immovable booking from aborting a block.
 
 ## 16. What `./test.sh` now covers
 
-155 checks against the running server, in 17 sections. The sections below drive
+155 checks against the running server, in 16 sections. The sections below drive
 whole flows rather than pinging endpoints:
 
 * **§11 Reviews** — completes a real booking, refuses a bare 1★, posts the
@@ -1264,7 +1264,7 @@ blocking a demo:
 
 ```
 akasha/
-├── start.sh / stop.sh / test.sh   run + verify (155 checks, 17 sections)
+├── start.sh / stop.sh / test.sh   run + verify (155 checks, 16 sections)
 ├── backend/
 │   ├── pytest.ini · conftest.py   test config + shared fixtures
 │   ├── config/settings/           base · dev · prod · test
