@@ -23,7 +23,7 @@ message the seller to agree a deal.
 ## Repository layout
 
 ```
-akasha/
+hassan/
 ├── backend/          Django REST API  (15 apps, 57 domain models)
 ├── mobile/           React Native app (Expo, TypeScript)
 ├── ml/               Datasets, feature pipelines, model training

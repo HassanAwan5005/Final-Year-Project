@@ -1263,7 +1263,7 @@ blocking a demo:
 ## 19. Where things live
 
 ```
-akasha/
+hassan/
 ├── start.sh / stop.sh / test.sh   run + verify (155 checks, 16 sections)
 ├── backend/
 │   ├── pytest.ini · conftest.py   test config + shared fixtures

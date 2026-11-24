@@ -72,8 +72,8 @@ folder; otherwise start your MySQL and Redis Windows services first.
 ## 1. Get the code
 
 ```bash
-git clone https://github.com/HassanAwan5005/Final-Year-Project.git akasha
-cd akasha
+git clone https://github.com/HassanAwan5005/Final-Year-Project.git hassan
+cd hassan
 ```
 
 The `main` branch holds the latest code.
@@ -81,7 +81,7 @@ The `main` branch holds the latest code.
 You should see:
 
 ```
-akasha/
+hassan/
 ├── backend/     Django REST API
 ├── mobile/      React Native app (the frontend)
 ├── ml/          Datasets + model training pipelines
@@ -569,10 +569,10 @@ the database.
 
 ```bash
 # Terminal 1 — backend
-cd akasha && ./start.sh
+cd hassan && ./start.sh
 
 # Terminal 2 — frontend
-cd akasha/mobile && npx expo start
+cd hassan/mobile && npx expo start
 ```
 
 **Ports**
